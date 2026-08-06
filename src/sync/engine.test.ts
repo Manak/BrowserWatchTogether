@@ -143,6 +143,139 @@ describe('room formation', () => {
   })
 })
 
+describe('arrivals and departures', () => {
+  /** Collect room events from a node. */
+  function watch(node: Node) {
+    const events: string[] = []
+    node.engine.onRoomEvent((e) => events.push(`${e.kind}:${e.name}`))
+    return events
+  }
+
+  it('announces someone joining, by name', () => {
+    const a = sim.add('a', 'Ada')
+    const events = watch(a)
+    sim.add('b', 'Bo')
+    sim.run(1500)
+    expect(events).toEqual(['join:Bo'])
+  })
+
+  it('never announces a nameless peer', () => {
+    const a = sim.add('a', 'Ada')
+    const events = watch(a)
+    sim.add('b', 'Bo')
+    sim.run(1500)
+    // 'Guest' is the placeholder before their hello arrives.
+    expect(events.join()).not.toMatch(/Guest/)
+  })
+
+  it('announces someone leaving, by name', () => {
+    const a = sim.add('a', 'Ada')
+    sim.add('b', 'Bo')
+    sim.run(1500)
+    const events = watch(a)
+
+    sim.get('b').engine.destroy()
+    sim.remove('b')
+    sim.run(1500)
+    expect(events).toEqual(['leave:Bo'])
+  })
+
+  it('does not announce ourselves', () => {
+    const a = sim.add('a', 'Ada')
+    const events = watch(a)
+    sim.run(1500)
+    expect(events).toEqual([])
+  })
+
+  it('announces each person once, not once per message', () => {
+    const a = sim.add('a', 'Ada')
+    const events = watch(a)
+    sim.add('b', 'Bo')
+    sim.run(30_000) // many heartbeats and re-announcements go by
+    expect(events).toEqual(['join:Bo'])
+  })
+
+  it('announces a rejoin after a dropped connection', () => {
+    const a = sim.add('a', 'Ada')
+    sim.add('b', 'Bo')
+    sim.run(1500)
+    const events = watch(a)
+
+    sim.remove('b')
+    sim.run(1500)
+    sim.add('b', 'Bo')
+    sim.run(1500)
+
+    expect(events).toEqual(['leave:Bo', 'join:Bo'])
+  })
+})
+
+describe('changes made outside our controls', () => {
+  it('adopts a pause from the native player', () => {
+    const a = sim.add('a', 'Ada')
+    const b = sim.add('b', 'Bo')
+    a.engine.setMedia(MEDIA)
+    a.engine.play()
+    sim.run(5000)
+
+    // iOS fullscreen controls pause the element directly.
+    b.video.pause()
+    b.engine.adoptExternal('pause', b.video.currentTime)
+    sim.run(1500)
+
+    expect(a.engine.getSnapshot().intentPlaying).toBe(false)
+    expect(a.video.paused).toBe(true)
+  })
+
+  it('adopts a seek from the native player', () => {
+    const a = sim.add('a', 'Ada')
+    const b = sim.add('b', 'Bo')
+    a.engine.setMedia(MEDIA)
+    a.engine.play()
+    sim.run(5000)
+
+    b.video.currentTime = 900
+    b.engine.adoptExternal('seek', 900)
+    sim.run(1500)
+
+    expect(a.video.currentTime).toBeGreaterThan(898)
+    expect(a.video.currentTime).toBeLessThan(903)
+  })
+
+  it('ignores the echo of a change the engine just made itself', () => {
+    const a = sim.add('a', 'Ada')
+    const b = sim.add('b', 'Bo')
+    a.engine.setMedia(MEDIA)
+    a.engine.seek(300)
+    sim.run(1000)
+
+    // The engine's own seek raises a `seeked` event on the element. Adopting
+    // it would issue a redundant control epoch and could ping-pong.
+    const before = b.engine.getSnapshot()
+    b.engine.adoptExternal('seek', b.video.currentTime)
+    sim.run(500)
+    expect(b.engine.getSnapshot().targetTime).toBeCloseTo(before.targetTime, 1)
+  })
+
+  it('ignores a play that merely confirms what the room already wants', () => {
+    const a = sim.add('a', 'Ada')
+    a.engine.setMedia(MEDIA)
+    a.engine.play()
+    sim.run(5000)
+    const seq = a.engine.getSnapshot()
+
+    a.engine.adoptExternal('play', a.video.currentTime)
+    sim.run(500)
+    expect(a.engine.getSnapshot().intentPlaying).toBe(seq.intentPlaying)
+  })
+
+  it('does nothing when there is no media', () => {
+    const a = sim.add('a', 'Ada')
+    a.engine.adoptExternal('play', 0)
+    expect(a.engine.getSnapshot().intentPlaying).toBe(false)
+  })
+})
+
 describe('control propagation', () => {
   it('propagates the media choice to everyone', () => {
     const a = sim.add('a', 'Ada')

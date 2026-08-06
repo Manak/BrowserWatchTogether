@@ -9,7 +9,8 @@ direct video URL.
 Two people open the same room code, one pastes a link, and both players stay
 locked to the same frame. Play, pause, and seek propagate to everyone; if one
 person's connection stalls, the room waits for them and starts again together.
-There is voice chat too, so you can talk over the film.
+There is voice chat too, so you can talk over the film — it asks for your
+microphone as you join, and starts unmuted.
 
 ---
 
@@ -172,6 +173,10 @@ picked up automatically.
    download link, or any direct video URL.
 5. **Watch.** Anyone can play, pause, or seek; everyone follows.
 
+Arrivals and departures show as a notice over the video, with a short chime,
+so you notice them in fullscreen or on a phone without opening the panel. The
+chime follows the video's mute button.
+
 ### Keyboard shortcuts (desktop)
 
 | Key | Action |
@@ -203,6 +208,9 @@ with everyone in the room; the app warns about this when it spots one.
 WebRTC without a TURN relay, which this app deliberately does not include (it
 would need a paid, always-on server). Try a different network or a phone
 hotspot.
+
+**Voice chat asked for my microphone and I did not want it.** Turn it off in
+the panel; the choice is remembered and it will not ask again.
 
 **No voice audio on an iPhone.** iOS will not start audio until you have
 interacted with the page, so tap anywhere — or use the "tap to hear" button if

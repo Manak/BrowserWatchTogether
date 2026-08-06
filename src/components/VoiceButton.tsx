@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { rememberVoicePreference } from '../hooks/useRoom'
 import { VOICE_OFF, type VoiceChat } from '../voice/voiceChat'
 
 interface Props {
@@ -38,8 +39,12 @@ export function VoiceButton({ voice }: Props) {
       title={label}
       disabled={starting}
       onClick={() => {
-        if (on) voice.toggleMuted()
-        else void voice.enable()
+        if (on) {
+          voice.toggleMuted()
+        } else {
+          rememberVoicePreference(true)
+          void voice.enable()
+        }
       }}
     >
       {on && !snap.muted ? <IconMic /> : <IconMicOff />}

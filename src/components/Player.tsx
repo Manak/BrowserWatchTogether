@@ -1,4 +1,4 @@
-import { useEffect, useRef, type RefObject } from 'react'
+import { useEffect, useRef, useState, type RefObject } from 'react'
 import { describeMediaError, type MediaRef } from '../lib/media'
 import type { SyncEngine } from '../sync/engine'
 
@@ -18,6 +18,11 @@ interface Props {
   volume: number
 }
 
+/** Give a flaky network a few chances before blaming the file. */
+const MAX_RELOADS = 6
+/** Back off so a long outage does not become a request storm. */
+const RELOAD_BACKOFF_MS = [1000, 2000, 4000, 8000, 15000, 30000]
+
 export function Player({
   engine,
   media,
@@ -28,6 +33,17 @@ export function Player({
   volume,
 }: Props) {
   const lastUrl = useRef<string | null>(null)
+  const reloads = useRef(0)
+  const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [, forceRetry] = useState(0)
+
+  // Cancel any pending recovery when the component goes away.
+  useEffect(
+    () => () => {
+      if (reloadTimer.current) clearTimeout(reloadTimer.current)
+    },
+    [],
+  )
 
   // Hand the element to the engine once; the engine drives play/pause/seek.
   useEffect(() => {
@@ -43,6 +59,7 @@ export function Player({
     const url = media?.url ?? null
     if (url === lastUrl.current) return
     lastUrl.current = url
+    reloads.current = 0
     onError(null)
     if (url) {
       el.src = url
@@ -90,11 +107,44 @@ export function Player({
       onTimeUpdate={report}
       onWaiting={() => engine.onStalled()}
       onStalled={() => engine.onStalled()}
+      // Native controls (iOS fullscreen, the lock screen, a headset) change the
+      // element directly. Tell the engine so the room follows instead of
+      // silently drifting apart; it ignores echoes of its own changes.
+      onPlay={() => engine.adoptExternal('play', videoRef.current?.currentTime ?? 0)}
+      onPause={() => engine.adoptExternal('pause', videoRef.current?.currentTime ?? 0)}
+      onSeeked={() => engine.adoptExternal('seek', videoRef.current?.currentTime ?? 0)}
       onError={() => {
         const el = videoRef.current
-        onError(describeMediaError(el?.error?.code, media?.kind ?? 'drive'))
+        const code = el?.error?.code
+        // A dropped connection is not a broken file. Retry, keeping our place,
+        // before telling the user anything is wrong.
+        if (code === 2 && reloads.current < MAX_RELOADS) {
+          const attempt = reloads.current++
+          const resumeAt = el?.currentTime ?? 0
+          const wait = RELOAD_BACKOFF_MS[attempt] ?? 30000
+          if (reloadTimer.current) clearTimeout(reloadTimer.current)
+          reloadTimer.current = setTimeout(() => {
+            const v = videoRef.current
+            if (!v || !media) return
+            v.src = media.url
+            v.load()
+            // Restore the position once there is enough of the file to seek.
+            const restore = () => {
+              v.currentTime = resumeAt
+              engine.onMediaLoaded()
+              v.removeEventListener('loadedmetadata', restore)
+            }
+            v.addEventListener('loadedmetadata', restore)
+            forceRetry((n) => n + 1)
+          }, wait)
+          return
+        }
+        onError(describeMediaError(code, media?.kind ?? 'drive'))
       }}
-      onCanPlay={() => onError(null)}
+      onCanPlay={() => {
+        reloads.current = 0
+        onError(null)
+      }}
     />
   )
 }

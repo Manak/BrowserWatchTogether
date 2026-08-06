@@ -227,6 +227,21 @@ Chromium's `playoutDelayHint` is set to 0, asking for the smallest buffer it
 will give us. It is non-standard and simply absent in Safari and Firefox, where
 the default buffer applies.
 
+### 13f. Voice is on by default and asks on join ⚠️
+
+You asked for the permission to be requested on joining, unmuted. So the room
+requests the microphone as part of connecting, rather than hiding it behind a
+button someone has to find once the film is running.
+
+The judgement I made on top of that: the preference is **remembered**, so
+turning voice off sticks and you are not asked again on the next room. The
+default for a first-time visitor is on. If you would rather it defaulted to off
+until asked for, that is one line in `voiceWantedOnJoin`.
+
+Note that some browsers require a user gesture before granting a microphone. If
+one refuses, nothing breaks — the panel falls back to a "Turn on" button. So
+this can only save a step, never cost one.
+
 ### 13e. Speaking is detected locally and announced
 
 Each peer analyses only its own microphone and broadcasts a boolean, rather than
@@ -234,6 +249,38 @@ every peer running an analyser over every incoming stream. One small message
 beats N audio graphs, and it keeps working where a browser will not hand us an
 analyser at all. Detection is deliberately asymmetric — quick to light up,
 slow to go dark — so the indicator does not strobe between syllables.
+
+---
+
+## Recovering from a bad connection
+
+### 13g. Reconnects are treated as joins
+
+`addStream` only reaches the peers connected at the moment it is called, so a
+peer that joins — or rejoins after their connection dropped — would hear
+silence from us forever. The microphone is now re-offered to each arriving
+peer, and since a reconnect looks exactly like a join, that is the recovery
+path as well as the join path.
+
+The sync engine already tolerated this: peers re-exchange names and state on
+reconnect, and whoever holds the highest control epoch supplies it.
+
+### 13h. A network error reloads the video rather than giving up
+
+A dropped connection is not a broken file, but the video element reports both
+the same way. `MEDIA_ERR_NETWORK` now retries the source with backoff (1s
+through 30s, six attempts), restoring the playhead each time, before showing an
+error. Any other error code still fails immediately — a file that is not shared
+publicly will not fix itself by being asked again.
+
+### 13i. Native controls are adopted, not fought
+
+On an iPhone only the video element can go fullscreen, so you get Apple's
+player and its controls rather than ours. Those change the element directly,
+which used to desync the room silently. The engine now adopts external play,
+pause and seek, ignoring anything that lands within a beat of a change it made
+itself. This also covers lock-screen buttons, headset controls and
+picture-in-picture.
 
 ---
 

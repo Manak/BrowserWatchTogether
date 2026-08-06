@@ -16,6 +16,27 @@ export interface RoomHandle {
   joinError: string | null
 }
 
+/** Remembers whether the user wants the microphone on when they join. */
+const VOICE_PREF_KEY = 'wt.voice'
+
+export function voiceWantedOnJoin(): boolean {
+  try {
+    // Default on: the point of the room is watching together and talking.
+    // Turning it off is remembered, so a "no thanks" sticks.
+    return localStorage.getItem(VOICE_PREF_KEY) !== 'off'
+  } catch {
+    return true
+  }
+}
+
+export function rememberVoicePreference(on: boolean): void {
+  try {
+    localStorage.setItem(VOICE_PREF_KEY, on ? 'on' : 'off')
+  } catch {
+    /* private browsing; the in-memory default still applies */
+  }
+}
+
 /**
  * Owns the lifetime of one room connection: the transport, the sync engine and
  * voice chat, created and torn down together. All three are built inside a
@@ -70,6 +91,12 @@ export function useRoom(roomCode: string, initialName: string): RoomHandle {
       )
       setRoom({ engine, voice })
       setJoinError(null)
+
+      // Ask for the microphone as part of joining, rather than making people
+      // find a button once the film has already started. Starts unmuted.
+      // Browsers that insist on a user gesture will refuse, and the panel then
+      // shows a Turn on button — so this can only ever save a step, not cost one.
+      if (voiceWantedOnJoin()) void voice.enable()
     } catch (err) {
       setJoinError(
         err instanceof Error ? err.message : 'Could not connect to the room.',

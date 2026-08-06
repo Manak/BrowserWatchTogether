@@ -30,11 +30,17 @@ class FakeTransport implements Transport {
   private msgHandlers: ((m: Msg, from: string) => void)[] = []
   private leaveHandlers: ((id: string) => void)[] = []
   added: MediaStream[] = []
+  /** Peer ids that a stream was sent to individually. */
+  addedTargets: string[] = []
   removed: MediaStream[] = []
+  private joinHandlers: ((id: string) => void)[] = []
   private streamHandlers: ((s: MediaStream, id: string) => void)[] = []
 
   media: MediaChannel = {
-    addStream: (s) => void this.added.push(s),
+    addStream: (s, target) => {
+      if (target) this.addedTargets.push(target)
+      else this.added.push(s)
+    },
     removeStream: (s) => void this.removed.push(s),
     onPeerStream: (h) => void this.streamHandlers.push(h),
     connections: () => ({}),
@@ -46,7 +52,9 @@ class FakeTransport implements Transport {
   onMessage(h: (m: Msg, from: string) => void) {
     this.msgHandlers.push(h)
   }
-  onPeerJoin() {}
+  onPeerJoin(h: (id: string) => void) {
+    this.joinHandlers.push(h)
+  }
   onPeerLeave(h: (id: string) => void) {
     this.leaveHandlers.push(h)
   }
@@ -57,6 +65,9 @@ class FakeTransport implements Transport {
 
   deliver(msg: Msg, from: string) {
     for (const h of this.msgHandlers) h(msg, from)
+  }
+  peerJoined(id: string) {
+    for (const h of this.joinHandlers) h(id)
   }
   peerLeft(id: string) {
     for (const h of this.leaveHandlers) h(id)
@@ -372,6 +383,44 @@ describe('when the browser refuses to autoplay remote audio', () => {
     s.transport.peerStream(asStream(new FakeStream()), 'bo')
     await vi.waitFor(() => expect(s.playAttempts).toContain('bo'))
     expect(s.voice.getSnapshot().needsGesture).toBe(false)
+  })
+})
+
+/**
+ * Recovery. `addStream` only reaches the peers connected when it is called, so
+ * without re-offering, anyone who joins — or rejoins after their connection
+ * dropped — hears silence from us forever.
+ */
+describe('recovering from a dropped connection', () => {
+  it('sends our microphone to a peer that joins later', async () => {
+    await s.voice.enable()
+    expect(s.transport.added).toHaveLength(1)
+
+    s.transport.peerJoined('bo')
+    expect(s.transport.addedTargets).toContain('bo')
+  })
+
+  it('re-sends after a peer drops and comes back', async () => {
+    await s.voice.enable()
+    s.transport.peerJoined('bo')
+    s.transport.peerLeft('bo')
+    s.transport.peerJoined('bo')
+
+    expect(s.transport.addedTargets.filter((t) => t === 'bo')).toHaveLength(2)
+  })
+
+  it('re-announces mute state to the returning peer', async () => {
+    await s.voice.enable()
+    s.voice.setMuted(true)
+    const before = s.transport.micMessages().length
+    s.transport.peerJoined('bo')
+    expect(s.transport.micMessages().length).toBeGreaterThan(before)
+    expect(s.transport.micMessages().at(-1)).toMatchObject({ on: true, muted: true })
+  })
+
+  it('offers nothing when our microphone is off', () => {
+    s.transport.peerJoined('bo')
+    expect(s.transport.addedTargets).toHaveLength(0)
   })
 })
 

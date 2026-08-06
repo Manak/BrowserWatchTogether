@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from 'react'
+import { rememberVoicePreference } from '../hooks/useRoom'
 import type { VoiceChat, VoiceSnapshot } from '../voice/voiceChat'
 
 interface Props {
@@ -25,7 +26,14 @@ export function VoicePanel({ voice }: Props) {
             >
               {snap.muted ? 'Unmute' : 'Mute'}
             </button>
-            <button className="btn btn-small" type="button" onClick={() => voice.disable()}>
+            <button
+              className="btn btn-small"
+              type="button"
+              onClick={() => {
+                rememberVoicePreference(false)
+                voice.disable()
+              }}
+            >
               Turn off
             </button>
           </div>
@@ -34,7 +42,10 @@ export function VoicePanel({ voice }: Props) {
             className="btn btn-small btn-primary"
             type="button"
             disabled={snap.state === 'starting'}
-            onClick={() => void voice.enable()}
+            onClick={() => {
+              rememberVoicePreference(true)
+              void voice.enable()
+            }}
           >
             {snap.state === 'starting' ? 'Starting…' : 'Turn on'}
           </button>

@@ -91,11 +91,12 @@ export function createTrysteroTransport(opts: TrysteroOptions): Transport {
   // Voice chat rides the same peer connections as the sync messages, so there
   // is no second connection to establish and no server in the audio path.
   const media: MediaChannel = {
-    addStream(stream) {
+    addStream(stream, target) {
       if (left) return
       // Returns one promise per peer; a peer that drops mid-negotiation is
       // routine in a mesh and must not become an unhandled rejection.
-      for (const p of room.addStream(stream)) void p.catch(() => {})
+      const sends = target ? room.addStream(stream, { target }) : room.addStream(stream)
+      for (const p of sends) void p.catch(() => {})
     },
     removeStream(stream) {
       if (left) return

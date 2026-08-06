@@ -31,7 +31,12 @@ export function configureAudioSession(): void {
 
 let sharedContext: AudioContext | null = null
 
-function audioContext(): AudioContext | null {
+/**
+ * One AudioContext for the whole app — metering, chimes, anything else.
+ * Browsers cap how many you may create, and each one costs a device handle.
+ * Exported so the chimes share it rather than opening their own.
+ */
+export function sharedAudioContext(): AudioContext | null {
   const Ctor =
     globalThis.AudioContext ??
     (globalThis as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
@@ -51,7 +56,7 @@ function audioContext(): AudioContext | null {
  * the context destination, so it makes no sound and cannot affect playback.
  */
 export function makeMeter(stream: MediaStream): LevelMeter | null {
-  const ctx = audioContext()
+  const ctx = sharedAudioContext()
   if (!ctx) return null
   try {
     const source = ctx.createMediaStreamSource(stream)

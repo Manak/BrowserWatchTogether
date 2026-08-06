@@ -5,6 +5,7 @@ import { Controls } from './Controls'
 import { MediaPicker } from './MediaPicker'
 import { PeopleList } from './PeopleList'
 import { Player, type VideoMeta } from './Player'
+import { Toasts } from './Toasts'
 import { VoiceButton } from './VoiceButton'
 import { VoicePanel } from './VoicePanel'
 import { VOICE_OFF, type VoiceChat } from '../voice/voiceChat'
@@ -27,7 +28,7 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
     voice ? voice.getSnapshot : NO_VOICE,
   )
   const videoRef = useRef<HTMLVideoElement | null>(null)
-  const stageRef = useRef<HTMLDivElement | null>(null)
+  const playerRef = useRef<HTMLDivElement | null>(null)
 
   const [meta, setMeta] = useState<VideoMeta>({
     currentTime: 0,
@@ -60,7 +61,7 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
   }
 
   const toggleFullscreen = useCallback(() => {
-    const stage = stageRef.current
+    const player = playerRef.current
     const video = videoRef.current as
       | (HTMLVideoElement & { webkitEnterFullscreen?: () => void })
       | null
@@ -68,11 +69,13 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
       void document.exitFullscreen()
       return
     }
-    if (stage?.requestFullscreen) {
-      void stage.requestFullscreen().catch(() => video?.webkitEnterFullscreen?.())
+    if (player?.requestFullscreen) {
+      void player.requestFullscreen().catch(() => video?.webkitEnterFullscreen?.())
       return
     }
-    // iPhone Safari only allows the video element itself to go fullscreen.
+    // iPhone Safari only allows the video element itself to go fullscreen, so
+    // there we get Apple's native controls instead of ours. The engine adopts
+    // whatever they do (see Player), so the room stays in sync either way.
     video?.webkitEnterFullscreen?.()
   }, [])
 
@@ -150,52 +153,58 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
 
       <div className="layout">
         <section className="stage-wrap">
-          <div className="stage" ref={stageRef}>
-            <Player
+          {/* Video and controls share one element, so going fullscreen takes
+              the controls with it instead of leaving them behind. */}
+          <div className="player" ref={playerRef}>
+            <div className="stage">
+              <Player
               engine={engine}
               media={snap.media}
               videoRef={videoRef}
               onMeta={onMeta}
-              onError={onError}
+                onError={onError}
+                muted={muted}
+                volume={volume}
+              />
+
+              <Toasts engine={engine} muted={muted} />
+
+              {voice && voiceSnap.needsGesture && (
+                <button
+                  className="voice-unlock"
+                  type="button"
+                  onClick={() => void voice.resumePlayback()}
+                >
+                  Tap to hear voice chat
+                </button>
+              )}
+
+              <Overlay
+                snap={snap}
+                mediaError={mediaError}
+                onUnlock={() => void engine.unlock()}
+                onPick={() => {
+                  // The picker lives in the Video tab, so reveal it too —
+                  // otherwise the button appears to do nothing.
+                  setChanging(true)
+                  setTab('video')
+                }}
+              />
+            </div>
+
+            <Controls
+              engine={engine}
+              snap={snap}
+              meta={meta}
               muted={muted}
               volume={volume}
-            />
-
-            {voice && voiceSnap.needsGesture && (
-              <button
-                className="voice-unlock"
-                type="button"
-                onClick={() => void voice.resumePlayback()}
-              >
-                Tap to hear voice chat
-              </button>
-            )}
-
-            <Overlay
-              snap={snap}
-              mediaError={mediaError}
-              onUnlock={() => void engine.unlock()}
-              onPick={() => {
-                // The picker lives in the Video tab, so reveal it too —
-                // otherwise the button appears to do nothing.
-                setChanging(true)
-                setTab('video')
-              }}
+              onMuted={setMuted}
+              onVolume={setVolume}
+              onFullscreen={toggleFullscreen}
+              disabled={noMedia}
+              voiceButton={<VoiceButton voice={voice} />}
             />
           </div>
-
-          <Controls
-            engine={engine}
-            snap={snap}
-            meta={meta}
-            muted={muted}
-            volume={volume}
-            onMuted={setMuted}
-            onVolume={setVolume}
-            onFullscreen={toggleFullscreen}
-            disabled={noMedia}
-            voiceButton={<VoiceButton voice={voice} />}
-          />
 
           {snap.media && (
             <div className="now-playing">

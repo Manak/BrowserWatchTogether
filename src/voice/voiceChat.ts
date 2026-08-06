@@ -165,6 +165,7 @@ export class VoiceChat {
 
     this.transport.onMessage((msg, from) => this.handle(msg, from))
     this.transport.onPeerLeave((id) => this.dropPeer(id))
+    this.transport.onPeerJoin((id) => this.offerLocalStream(id))
     this.transport.media?.onPeerStream((stream, peerId) => {
       this.attachRemote(stream, peerId)
     })
@@ -345,6 +346,21 @@ export class VoiceChat {
     this.remotes.set(peerId, remote)
     this.tuneReceiversForLatency()
     void this.start(peerId, remote)
+  }
+
+  /**
+   * Send our microphone to a peer that has just appeared.
+   *
+   * `addStream` only reaches the peers connected at the moment it is called,
+   * so without this anyone who joins — or rejoins after their connection
+   * dropped — hears silence from us forever. Reconnects look exactly like
+   * joins, which is what makes this the recovery path too.
+   */
+  private offerLocalStream(peerId: string): void {
+    if (this.destroyed || !this.stream) return
+    this.transport.media?.addStream(this.stream, peerId)
+    // Also re-announce, so they learn our mute state without waiting.
+    this.announce(true)
   }
 
   /** Try to start a remote, recording whether the browser refused. */

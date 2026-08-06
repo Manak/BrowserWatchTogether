@@ -83,6 +83,14 @@ interface PeerRecord {
   lastSeen: number
 }
 
+/** Somebody arriving or leaving, for chimes and on-screen notices. */
+export interface RoomEvent {
+  kind: 'join' | 'leave'
+  id: string
+  name: string
+  at: number
+}
+
 /** Where the room's playhead is anchored, and whether it is moving. */
 interface Anchor {
   time: number
@@ -121,6 +129,8 @@ export class SyncEngine {
   private waitForEveryone = true
 
   private lastSeekAt = -Infinity
+  /** When we last drove the element ourselves, to recognise our own echoes. */
+  private lastAppliedAt = -Infinity
   // -Infinity so the first update() pings and heartbeats immediately: a newly
   // joined peer needs a clock offset before its first drift correction.
   private lastTickSent = -Infinity
@@ -136,6 +146,9 @@ export class SyncEngine {
   private playAttempt: Promise<void> | null = null
 
   private listeners = new Set<() => void>()
+  private eventListeners = new Set<(e: RoomEvent) => void>()
+  /** Peers we have announced, so a flapping connection cannot spam. */
+  private announced = new Set<string>()
   private snapshot: Snapshot
   private snapshotDirty = true
 
@@ -179,6 +192,35 @@ export class SyncEngine {
     this.invalidate()
   }
 
+  /**
+   * Something changed the element from outside our controls — iOS native
+   * fullscreen, the lock-screen buttons, a headset, picture-in-picture.
+   *
+   * Without this the room silently desyncs the moment someone scrubs in the
+   * native player. Our own writes to the element raise the same events, so
+   * anything that lands within a beat of a change we made is ignored as an
+   * echo of ourselves.
+   */
+  adoptExternal(kind: 'play' | 'pause' | 'seek', time: number): void {
+    if (this.destroyed || !this.media) return
+    if (this.now() - this.lastAppliedAt < this.tuning.settleMs) return
+
+    switch (kind) {
+      case 'play':
+        if (!this.playback.playing) this.play()
+        break
+      case 'pause':
+        if (this.playback.playing) this.pause()
+        break
+      case 'seek':
+        // Drift correction lands on the target, so only a real jump differs.
+        if (Math.abs(time - this.targetTime()) > this.tuning.hardSeekSec) {
+          this.seek(time)
+        }
+        break
+    }
+  }
+
   /** The element buffered out; report it immediately rather than waiting. */
   onStalled(): void {
     this.sendReady(true)
@@ -220,6 +262,7 @@ export class SyncEngine {
     this.destroyed = true
     this.transport.send({ t: 'bye' })
     this.listeners.clear()
+    this.eventListeners.clear()
   }
 
   // -------------------------------------------------------------------------
@@ -306,6 +349,23 @@ export class SyncEngine {
   private invalidate(): void {
     this.snapshotDirty = true
     for (const l of this.listeners) l()
+  }
+
+  /**
+   * Subscribe to arrivals and departures.
+   *
+   * Kept separate from the snapshot because these are moments, not state: a
+   * chime and a notice need to fire once, where re-rendering a snapshot is
+   * idempotent by design.
+   */
+  onRoomEvent(listener: (e: RoomEvent) => void): () => void {
+    this.eventListeners.add(listener)
+    return () => this.eventListeners.delete(listener)
+  }
+
+  private emit(kind: RoomEvent['kind'], id: string, name: string): void {
+    const event: RoomEvent = { kind, id, name, at: this.now() }
+    for (const l of this.eventListeners) l(event)
   }
 
   private buildSnapshot(): Snapshot {
@@ -418,9 +478,15 @@ export class SyncEngine {
   }
 
   private onPeerLeave(id: string): void {
+    this.noteDeparture(id)
     this.peers.delete(id)
     this.clock.forget(id)
     this.invalidate()
+  }
+
+  private noteDeparture(id: string): void {
+    if (!this.announced.delete(id)) return
+    this.emit('leave', id, this.peers.get(id)?.name ?? 'Someone')
   }
 
   private touch(id: string): PeerRecord {
@@ -449,6 +515,12 @@ export class SyncEngine {
     switch (msg.t) {
       case 'hello': {
         rec.name = msg.name
+        // Announced here rather than on connect: at connect time we do not yet
+        // know their name, and "Guest joined" helps nobody.
+        if (!this.announced.has(from)) {
+          this.announced.add(from)
+          this.emit('join', from, msg.name)
+        }
         if (msg.reply) {
           this.transport.send(
             { t: 'hello', v: PROTOCOL_VERSION, name: this.name, reply: false },
@@ -535,6 +607,7 @@ export class SyncEngine {
       }
 
       case 'bye': {
+        this.noteDeparture(from)
         this.peers.delete(from)
         this.clock.forget(from)
         break
@@ -754,6 +827,7 @@ export class SyncEngine {
     if (Math.abs(el.currentTime - target) > this.tuning.deadbandSec) {
       el.currentTime = target
       this.lastSeekAt = this.now()
+      this.lastAppliedAt = this.now()
     }
     el.playbackRate = 1
     this.applyPlayState()
@@ -765,6 +839,7 @@ export class SyncEngine {
     const want = this.shouldBePlaying()
     // Once autoplay has been refused, stop hammering play(): every rejected
     // call is a console error, and only a real gesture can change the answer.
+    if (want !== !el.paused) this.lastAppliedAt = this.now()
     if (want && el.paused && !this.needsGesture) {
       const p = el.play()
       this.playAttempt = p
@@ -814,6 +889,7 @@ export class SyncEngine {
       el.currentTime = correction.seekTo
       el.playbackRate = 1
       this.lastSeekAt = now
+      this.lastAppliedAt = now
     } else {
       el.playbackRate = correction.rate
     }
@@ -825,6 +901,7 @@ export class SyncEngine {
     const live = new Set(this.transport.peers())
     for (const id of [...this.peers.keys()]) {
       if (!live.has(id) && now - (this.peers.get(id)?.lastSeen ?? 0) > 5000) {
+        this.noteDeparture(id)
         this.peers.delete(id)
         this.clock.forget(id)
       }

@@ -23,7 +23,8 @@ export interface Transport {
 
 /** Sending and receiving live media tracks over the same peer connections. */
 export interface MediaChannel {
-  addStream(stream: MediaStream): void
+  /** Send to everyone, or to one peer when `target` is given. */
+  addStream(stream: MediaStream, target?: string): void
   removeStream(stream: MediaStream): void
   onPeerStream(handler: (stream: MediaStream, peerId: string) => void): void
   /**
