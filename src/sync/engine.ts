@@ -16,6 +16,8 @@ export interface MediaElementLike {
   readonly paused: boolean
   readonly duration: number
   readonly readyState: number
+  /** NETWORK_IDLE (1) means the browser has deliberately stopped fetching. */
+  readonly networkState: number
   readonly ended: boolean
   readonly buffered: {
     readonly length: number
@@ -100,6 +102,8 @@ export interface EngineOptions {
 
 const HAVE_CURRENT_DATA = 2
 const HAVE_FUTURE_DATA = 3
+const HAVE_ENOUGH_DATA = 4
+const NETWORK_IDLE = 1
 
 export class SyncEngine {
   private readonly transport: Transport
@@ -692,12 +696,23 @@ export class SyncEngine {
     if (!this.media) return true
     if (!el) return false
     if (el.ended) return true
+
+    // The browser's own verdict comes first. A paused <video> buffers a couple
+    // of seconds, fires `suspend`, and stops — it will not fetch more until it
+    // is playing. Demanding a buffer depth it has decided not to reach would
+    // deadlock: not ready, so we hold the room; held, so it never plays; never
+    // playing, so it never buffers.
+    if (el.readyState >= HAVE_ENOUGH_DATA) return true
+    if (el.readyState < HAVE_FUTURE_DATA) return false
+    if (el.networkState === NETWORK_IDLE) return true
+
+    // Still actively downloading, so a depth requirement is meaningful.
     // Hysteresis: once we have stalled, demand a deeper buffer before we claim
     // to be ready again, so the room does not stutter in and out of the gate.
     const need = this.lastReady
       ? this.tuning.minBufferSec
       : this.tuning.resumeBufferSec
-    return el.readyState >= HAVE_FUTURE_DATA && this.selfBuffered() >= need
+    return this.selfBuffered() >= need
   }
 
   private notReadyPeers(now: number): PeerRecord[] {

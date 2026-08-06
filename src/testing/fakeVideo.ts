@@ -29,11 +29,37 @@ export class FakeVideo implements MediaElementLike {
   playCalls = 0
   seekCount = 0
 
+  /**
+   * Set when the browser has decided it has buffered enough for now and has
+   * stopped fetching — what Chrome does to a paused element after a couple of
+   * seconds. Distinct from `starve()`, which models the network failing.
+   */
+  suspended = false
+
   get readyState(): number {
     if (this.bufferEnd <= this.currentTime + 0.01) return 1 // HAVE_METADATA
     if (this.bufferEnd < this.currentTime + 0.5) return 2 // HAVE_CURRENT_DATA
+    if (this.suspended) return 4 // browser says it can play through
+    if (this.bufferEnd < this.currentTime + 1) return 3 // HAVE_FUTURE_DATA
     return 4 // HAVE_ENOUGH_DATA
   }
+
+  get networkState(): number {
+    return this.suspended || this.downloadRate === 0 ? 1 : 2 // IDLE : LOADING
+  }
+
+  /**
+   * Reproduce a real paused <video>: a shallow buffer, then `suspend`.
+   * Chrome will not fetch more until playback starts.
+   */
+  suspendWithBuffer(seconds: number): void {
+    this.bufferEnd = this.currentTime + seconds
+    this.rateBeforeSuspend = this.downloadRate
+    this.downloadRate = 0
+    this.suspended = true
+  }
+
+  private rateBeforeSuspend = Infinity
 
   get buffered() {
     const end = Math.min(this.bufferEnd, this.duration)
@@ -60,7 +86,16 @@ export class FakeVideo implements MediaElementLike {
   /** Simulate `ms` of wall time passing. */
   advance(ms: number): void {
     const secs = ms / 1000
-    if (Number.isFinite(this.downloadRate)) {
+    // A browser that suspended while paused resumes fetching once it plays.
+    if (this.suspended && !this.paused) {
+      this.suspended = false
+      this.downloadRate = this.rateBeforeSuspend
+    }
+    if (this.downloadRate === Infinity) {
+      // "Infinitely fast" means the whole file is available, not "add Infinity
+      // seconds of buffer", which would leave bufferEnd untouched.
+      this.bufferEnd = this.duration
+    } else if (Number.isFinite(this.downloadRate)) {
       this.bufferEnd = Math.min(this.duration, this.bufferEnd + this.downloadRate * secs)
     }
     if (this.paused) return
@@ -78,11 +113,13 @@ export class FakeVideo implements MediaElementLike {
   starve(bufferSecondsAhead = 0): void {
     this.bufferEnd = this.currentTime + bufferSecondsAhead
     this.downloadRate = 0
+    this.suspended = false
   }
 
   /** Let the buffer refill again. */
   refill(rate = 8): void {
     this.downloadRate = rate
+    this.suspended = false
   }
 
   seekTo(t: number): void {

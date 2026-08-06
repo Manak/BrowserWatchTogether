@@ -485,6 +485,47 @@ describe('buffering coordination', () => {
     expect(sim.spread()).toBeLessThan(1)
   })
 
+  /**
+   * Regression, found with a real 1GB file over the network. A paused <video>
+   * buffers a couple of seconds, fires `suspend`, and stops fetching until it
+   * plays. Requiring a deeper buffer than that deadlocks the room: not ready,
+   * so we hold; held, so it never plays; never playing, so it never buffers.
+   */
+  it('starts even though a paused element suspends with a shallow buffer', () => {
+    const a = sim.add('a', 'Ada')
+    const b = sim.add('b', 'Bo')
+    a.engine.setMedia(MEDIA)
+    sim.run(500)
+
+    // Less than resumeBufferSec, which is exactly what Chrome does.
+    expect(2.4).toBeLessThan(TUNING.resumeBufferSec)
+    a.video.suspendWithBuffer(2.4)
+    b.video.suspendWithBuffer(2.4)
+    sim.run(1000)
+
+    a.engine.play()
+    sim.run(2000)
+
+    expect(a.engine.getSnapshot().gated).toBe(false)
+    expect(a.engine.getSnapshot().waitingFor).toEqual([])
+    expect(a.video.paused).toBe(false)
+    expect(b.video.paused).toBe(false)
+  })
+
+  it('still waits for a peer whose buffer has genuinely run dry', () => {
+    const a = sim.add('a', 'Ada')
+    const b = sim.add('b', 'Bo')
+    a.engine.setMedia(MEDIA)
+    a.engine.play()
+    sim.run(3000)
+
+    // An empty buffer is not the same as a satisfied browser.
+    b.video.starve(0)
+    sim.run(2000)
+    expect(a.engine.getSnapshot().gated).toBe(true)
+    expect(a.engine.getSnapshot().waitingFor).toEqual(['Bo'])
+  })
+
   it('does not wait when the option is turned off', () => {
     const a = sim.add('a', 'Ada')
     const b = sim.add('b', 'Bo')
