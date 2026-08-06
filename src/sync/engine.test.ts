@@ -578,6 +578,45 @@ describe('late joiners', () => {
     expect(sim.spread()).toBeLessThan(0.6)
   })
 
+  /**
+   * Regression: the host refreshed its page an hour into a film and the room
+   * jumped back to the start. The catch-up message carried the position as of
+   * the last play/pause — which may be very old — so a newcomer that could not
+   * yet convert the sender's clock resolved it to zero, then took over as host
+   * and dragged everyone else back with it.
+   */
+  it('catches a newcomer up to the live position, not the last button press', () => {
+    const z = sim.add('z', 'Zoe')
+    z.engine.setMedia(MEDIA)
+    z.engine.play()
+    sim.run(20 * 60_000, 1000) // twenty minutes with no further control events
+    expect(z.video.currentTime).toBeGreaterThan(1100)
+
+    // Rejoins with a lower id, so it becomes host once its video has loaded.
+    const a = sim.add('a', 'Ada')
+    sim.run(8000)
+
+    expect(a.video.currentTime).toBeGreaterThan(1100)
+    expect(z.video.currentTime).toBeGreaterThan(1100)
+    expect(sim.spread()).toBeLessThan(1)
+  })
+
+  it('never drags the room backwards when the host reconnects', () => {
+    const z = sim.add('z', 'Zoe')
+    z.engine.setMedia(MEDIA)
+    z.engine.play()
+    sim.run(10 * 60_000, 1000)
+    const before = z.video.currentTime
+
+    sim.add('a', 'Ada')
+    let lowest = Infinity
+    for (let i = 0; i < 40; i++) {
+      sim.run(250)
+      lowest = Math.min(lowest, z.video.currentTime)
+    }
+    expect(lowest).toBeGreaterThan(before - 2)
+  })
+
   it('catches a newcomer up while the room is paused', () => {
     const a = sim.add('a', 'Ada')
     a.engine.setMedia(MEDIA)

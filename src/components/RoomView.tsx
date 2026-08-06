@@ -61,7 +61,7 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
     }
   }
 
-  const immersive = useImmersive(playerRef, snap.effectivePlaying)
+  const immersive = useImmersive(playerRef, videoRef, snap.effectivePlaying)
 
   // Any interaction anywhere counts as the gesture iOS is waiting for, so most
   // people never see the "tap to hear" prompt — the first thing they touch
@@ -140,9 +140,9 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
           {/* Video and controls share one element, so going fullscreen takes
               the controls with it instead of leaving them behind. */}
           <div
-            className={`player${immersive.active ? ' player-immersive' : ''}${
-              immersive.fauxFullscreen ? ' player-faux' : ''
-            }${immersive.active && !immersive.controlsVisible ? ' player-idle' : ''}`}
+            className={`player${
+              immersive.active && !immersive.controlsVisible ? ' player-idle' : ''
+            }`}
             ref={playerRef}
             onPointerMove={immersive.wake}
             onPointerDown={immersive.wake}
@@ -160,17 +160,6 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
               />
 
               <Toasts engine={engine} muted={muted} />
-
-              {immersive.fauxFullscreen && (
-                <button
-                  className="immersive-exit"
-                  type="button"
-                  aria-label="Exit fullscreen"
-                  onClick={immersive.exit}
-                >
-                  ✕
-                </button>
-              )}
 
               {voice && voiceSnap.needsGesture && (
                 <button

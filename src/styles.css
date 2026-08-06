@@ -373,6 +373,7 @@ input {
 }
 
 .player {
+  position: relative;
   display: flex;
   flex-direction: column;
   min-height: 0;
@@ -385,30 +386,28 @@ input {
   background: #000;
 }
 
-/* Immersive: the video fills the screen and the controls float over it.
-   Covers both the real Fullscreen API and, on iPhone where that API does not
-   exist for anything but a <video>, our own expanded layout. */
-.player-immersive {
+/* Fullscreen: the video fills the screen and the controls float over it,
+   rather than being left behind outside the fullscreen element.
+   
+   Keyed on :fullscreen rather than a class, because the browser guarantees
+   that selector. A class driven by React state would leave the layout
+   unstyled for as long as the state was wrong — which is the whole screen. */
+.player:fullscreen,
+.player:-webkit-full-screen {
+  width: 100%;
   height: 100%;
   background: #000;
 }
 
-/* iPhone has no Fullscreen API, so we cover the viewport ourselves and keep
-   our own controls rather than handing the screen to Apple's player. */
-.player-faux {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  height: 100dvh;
-}
-
-.player-immersive .stage {
+.player:fullscreen .stage,
+.player:-webkit-full-screen .stage {
   flex: 1;
   aspect-ratio: auto;
   min-height: 0;
 }
 
-.player-immersive .controls {
+.player:fullscreen .controls,
+.player:-webkit-full-screen .controls {
   position: absolute;
   right: 0;
   bottom: 0;
@@ -418,40 +417,18 @@ input {
   padding-left: max(8px, env(safe-area-inset-left));
   border: 0;
   background: linear-gradient(to top, rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0));
-  opacity: 1;
   transition: opacity 0.2s ease;
 }
 
-/* Timed in JS, because `:hover` is always true once the player covers the
-   whole screen and so can never express "idle". */
+/* Only the hiding is class-driven, because idleness has to be timed in JS:
+   `:hover` is always true once the player covers the screen. If the state is
+   ever wrong the controls simply stay visible, which is the safe failure. */
 .player-idle .controls {
   opacity: 0;
   pointer-events: none;
 }
 .player-idle {
   cursor: none;
-}
-
-.immersive-exit {
-  position: absolute;
-  top: max(10px, env(safe-area-inset-top));
-  right: max(10px, env(safe-area-inset-right));
-  z-index: 4;
-  display: grid;
-  place-items: center;
-  width: var(--tap);
-  height: var(--tap);
-  border: 0;
-  border-radius: 50%;
-  background: rgba(0, 0, 0, 0.55);
-  color: #fff;
-  font-size: 18px;
-  cursor: pointer;
-  transition: opacity 0.2s ease;
-}
-.player-idle .immersive-exit {
-  opacity: 0;
-  pointer-events: none;
 }
 
 /* ------------------------------------------------------------------ controls */

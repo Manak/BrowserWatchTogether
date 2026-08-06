@@ -536,7 +536,7 @@ export class SyncEngine {
               t: 'sync',
               v: PROTOCOL_VERSION,
               media: this.media,
-              playback: this.playback,
+              playback: this.livePlayback(),
               waitForEveryone: this.waitForEveryone,
             },
             from,
@@ -681,6 +681,26 @@ export class SyncEngine {
       ended: !!this.el?.ended,
       loaded: this.selfCanLead(),
     })
+  }
+
+  /**
+   * The current playback state, re-anchored to *now* and to our own playhead.
+   *
+   * `this.playback` is anchored to whenever someone last pressed something,
+   * which may be an hour ago. A newcomer cannot convert our clock yet — it has
+   * no round-trip sample for us — so it treats the timestamp as "now" and any
+   * elapsed time in it is simply lost, landing the room back at the start.
+   * Sending where we actually are, stamped now, reduces that loss to one
+   * network hop.
+   */
+  private livePlayback(): Playback {
+    return {
+      playing: this.playback.playing,
+      time: this.currentTime(),
+      at: this.now(),
+      origin: this.transport.selfId,
+      seq: this.playback.seq,
+    }
   }
 
   /** Create and broadcast a new control epoch. */

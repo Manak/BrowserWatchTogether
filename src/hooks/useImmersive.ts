@@ -4,14 +4,11 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 const IDLE_MS = 3000
 
 export interface Immersive {
-  /** Filling the screen, by either route. */
+  /** The browser reports us as fullscreen. */
   active: boolean
-  /** Our own expanded layout, used where the Fullscreen API is unavailable. */
-  fauxFullscreen: boolean
   /** Whether the controls should currently be on screen. */
   controlsVisible: boolean
   toggle: () => void
-  exit: () => void
   /** Call on any pointer or key activity to bring the controls back. */
   wake: () => void
 }
@@ -19,25 +16,23 @@ export interface Immersive {
 /**
  * Fullscreen, plus the auto-hiding controls that go with it.
  *
- * Two things the browser will not do for us:
+ * The hiding cannot be done in CSS: `:hover` is always true once the player
+ * covers the screen, so it can never express "idle". It has to be timed in JS.
  *
- * 1. **iPhone has no Fullscreen API.** Only a `<video>` can go fullscreen
- *    there, and doing so hands the screen to Apple's player — our controls,
- *    participant list and join notices all disappear. So on iPhone we expand
- *    our own player to fill the viewport instead, and keep our UI.
- * 2. **Hiding controls cannot be done in CSS.** `:hover` is always true once
- *    the player covers the screen, so idleness has to be timed in JS.
+ * On iPhone, where the Fullscreen API exists only for `<video>`, we hand the
+ * screen to Apple's player. Our own controls are not available there, but the
+ * engine adopts whatever the native controls do (see Player), so the room
+ * stays in sync either way.
  */
 export function useImmersive(
   target: React.RefObject<HTMLElement | null>,
+  video: React.RefObject<HTMLVideoElement | null>,
   playing: boolean,
 ): Immersive {
-  const [nativeFullscreen, setNativeFullscreen] = useState(false)
-  const [fauxFullscreen, setFaux] = useState(false)
+  const [active, setActive] = useState(false)
   const [idle, setIdle] = useState(false)
   const idleTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
-  const active = nativeFullscreen || fauxFullscreen
   // Derived rather than stored, so leaving fullscreen or pausing brings the
   // controls back without an effect having to reach in and set state.
   const controlsVisible = !active || !playing || !idle
@@ -45,7 +40,7 @@ export function useImmersive(
   // Track the browser's own idea of fullscreen; the user can leave with Escape
   // or the system chrome, and our state has to follow.
   useEffect(() => {
-    const sync = () => setNativeFullscreen(Boolean(document.fullscreenElement))
+    const sync = () => setActive(Boolean(document.fullscreenElement))
     document.addEventListener('fullscreenchange', sync)
     document.addEventListener('webkitfullscreenchange', sync)
     return () => {
@@ -71,49 +66,23 @@ export function useImmersive(
     }
   }, [active, playing])
 
-  // Our expanded layout locks the page behind it, or iOS will happily scroll
-  // the room out from under the player.
-  useEffect(() => {
-    if (!fauxFullscreen) return
-    const previous = document.body.style.overflow
-    document.body.style.overflow = 'hidden'
-    return () => {
-      document.body.style.overflow = previous
-    }
-  }, [fauxFullscreen])
-
-  // Escape is wired into the Fullscreen API for free, but not into ours.
-  useEffect(() => {
-    if (!fauxFullscreen) return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setFaux(false)
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
-  }, [fauxFullscreen])
-
-  const exit = useCallback(() => {
-    setFaux(false)
-    if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
-  }, [])
-
   const toggle = useCallback(() => {
     if (document.fullscreenElement) {
       void document.exitFullscreen().catch(() => {})
       return
     }
-    if (fauxFullscreen) {
-      setFaux(false)
-      return
-    }
     const el = target.current
-    // requestFullscreen simply does not exist on iPhone Safari.
+    const nativeVideo = video.current as
+      | (HTMLVideoElement & { webkitEnterFullscreen?: () => void })
+      | null
     if (el?.requestFullscreen) {
-      void el.requestFullscreen().catch(() => setFaux(true))
+      void el.requestFullscreen().catch(() => nativeVideo?.webkitEnterFullscreen?.())
       return
     }
-    setFaux(true)
-  }, [fauxFullscreen, target])
+    // iPhone Safari: only the video element can go fullscreen, which means
+    // Apple's controls rather than ours.
+    nativeVideo?.webkitEnterFullscreen?.()
+  }, [target, video])
 
-  return { active, fauxFullscreen, controlsVisible, toggle, exit, wake }
+  return { active, controlsVisible, toggle, wake }
 }

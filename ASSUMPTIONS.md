@@ -273,6 +273,21 @@ through 30s, six attempts), restoring the playhead each time, before showing an
 error. Any other error code still fails immediately — a file that is not shared
 publicly will not fix itself by being asked again.
 
+### 13k. Catch-up sends the live position, not the last button press
+
+Reported: the host refreshed an hour into a film and the room jumped back to
+the start.
+
+`playback` is anchored to whenever someone last pressed something, which can be
+hours ago. A newcomer has no round-trip sample for the sender yet, so it cannot
+convert that timestamp and deliberately treats it as "now" (see the clock notes
+in docs/SYNC.md) — which silently discards every minute of elapsed playback.
+The rejoining host therefore landed at zero, and being the lowest peer id, took
+over as host and dragged everyone else back with it.
+
+Catch-up now sends the sender's *actual current playhead* stamped now, so the
+worst case is one network hop of error instead of the whole film.
+
 ### 13j. Locking a phone used to end the room silently ⚠️
 
 Reported from real use: lock the phone, and the desktop sees you leave; unlock,
@@ -298,19 +313,24 @@ the video you just queued.
 
 ### 13i. Native controls are adopted, not fought
 
-iPhone has no Fullscreen API for anything but a `<video>`, and using it hands
-the screen to Apple's player — losing our controls, the participant list and
-the join notices. So on iPhone the player expands to fill the viewport itself
-and **keeps our own UI**. Everywhere else the real Fullscreen API is used.
+iPhone has no Fullscreen API for anything but a `<video>`, so there fullscreen
+hands the screen to Apple's player and our controls are not available.
 
-Either way the engine now adopts play, pause and seek made outside our
-controls, which used to desync the room silently. It ignores anything landing
-within a beat of a change it made itself. This also covers lock-screen buttons,
-headset controls and picture-in-picture.
+I did try expanding our own player to fill the viewport instead, to keep our
+UI — it looked wrong in practice and was reverted. Worth knowing if it comes up
+again: the honest options are Apple's player (what we do now) or a pseudo-
+fullscreen that cannot hide Safari's own chrome and so never quite looks right.
 
-Controls auto-hide after three seconds of stillness while playing, timed in JS
-because `:hover` is always true once the player covers the screen and so can
-never express "idle".
+What makes the native player acceptable is that the engine adopts play, pause
+and seek made outside our controls, so the room stays in sync through it. It
+ignores anything landing within a beat of a change it made itself, and the same
+mechanism covers lock-screen buttons, headsets and picture-in-picture.
+
+Controls auto-hide after three seconds of stillness while playing. The hiding
+is timed in JS because `:hover` is always true once the player covers the
+screen and so can never express "idle" — but the fullscreen *layout* is keyed
+on the `:fullscreen` selector, not a class, so it cannot be left unstyled by a
+stale piece of React state.
 
 ---
 
