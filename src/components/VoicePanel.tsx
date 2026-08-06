@@ -41,6 +41,16 @@ export function VoicePanel({ voice }: Props) {
         )}
       </div>
 
+      {snap.needsGesture && (
+        <button
+          className="btn btn-primary btn-block"
+          type="button"
+          onClick={() => void voice.resumePlayback()}
+        >
+          Tap to hear {peopleTalking(snap)}
+        </button>
+      )}
+
       {snap.error && (
         <p className="error" role="alert">
           {snap.error}
@@ -54,6 +64,12 @@ export function VoicePanel({ voice }: Props) {
       </p>
     </div>
   )
+}
+
+/** iOS blocks audio until the listener interacts, so name who they are missing. */
+function peopleTalking(snap: VoiceSnapshot): string {
+  const count = Object.values(snap.peers).filter((p) => p.on).length
+  return count === 1 ? 'the other person' : 'everyone'
 }
 
 function stateLabel(snap: VoiceSnapshot): string {

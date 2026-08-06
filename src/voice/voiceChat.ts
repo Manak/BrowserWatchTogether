@@ -44,6 +44,18 @@ export interface VoiceSnapshot {
   peers: Record<string, VoicePeer>
   /** True when at least one other person has their mic on. */
   anyoneElseOn: boolean
+  /**
+   * Someone is talking but the browser refused to play them until we get a
+   * user gesture. Listeners who never touch the screen hit this on iOS.
+   */
+  needsGesture: boolean
+}
+
+/** A remote peer's audio, attached to something audible. */
+export interface RemoteAudio {
+  /** Start playback. Resolves false when the browser refused. */
+  play(): Promise<boolean>
+  detach(): void
 }
 
 /**
@@ -60,6 +72,7 @@ export const VOICE_OFF: VoiceSnapshot = Object.freeze({
   error: null,
   peers: Object.freeze({}),
   anyoneElseOn: false,
+  needsGesture: false,
 }) as VoiceSnapshot
 
 /** Reads the current microphone level. Real one uses an AnalyserNode. */
@@ -74,8 +87,8 @@ export interface VoiceDeps {
   getUserMedia?: (constraints: MediaStreamConstraints) => Promise<MediaStream>
   /** Build a level meter for the local stream. Optional: no meter, no speaking flag. */
   makeMeter?: (stream: MediaStream) => LevelMeter | null
-  /** Attach a remote stream to something audible. Returns a detach function. */
-  playRemote?: (stream: MediaStream, peerId: string) => () => void
+  /** Attach a remote stream to something audible. */
+  playRemote?: (stream: MediaStream, peerId: string) => RemoteAudio
   /** Ask the platform to keep playback and capture running together. */
   configureAudioSession?: () => void
   speaking?: SpeakingOptions
@@ -106,7 +119,7 @@ export class VoiceChat {
   private readonly now: () => number
   private readonly getUserMedia: (c: MediaStreamConstraints) => Promise<MediaStream>
   private readonly makeMeter: (s: MediaStream) => LevelMeter | null
-  private readonly playRemote: (s: MediaStream, id: string) => () => void
+  private readonly playRemote: (s: MediaStream, id: string) => RemoteAudio
   private readonly configureAudioSession: () => void
 
   private state: VoiceState = 'off'
@@ -118,7 +131,9 @@ export class VoiceChat {
   private meter: LevelMeter | null = null
   private readonly detector: SpeakingDetector
   private readonly peers = new Map<string, VoicePeer>()
-  private readonly remoteDetach = new Map<string, () => void>()
+  private readonly remotes = new Map<string, RemoteAudio>()
+  /** Remotes the browser refused to start until we get a gesture. */
+  private readonly blocked = new Set<string>()
 
   private lastMeterAt = 0
   private lastAnnounceAt = 0
@@ -142,7 +157,8 @@ export class VoiceChat {
         return md.getUserMedia(c)
       })
     this.makeMeter = deps.makeMeter ?? (() => null)
-    this.playRemote = deps.playRemote ?? (() => () => {})
+    this.playRemote =
+      deps.playRemote ?? (() => ({ play: () => Promise.resolve(true), detach: () => {} }))
     this.configureAudioSession = deps.configureAudioSession ?? (() => {})
     this.detector = new SpeakingDetector(deps.speaking ?? SPEAKING_DEFAULTS)
     this.snapshot = this.build()
@@ -181,6 +197,9 @@ export class VoiceChat {
       this.meter = this.makeMeter(stream)
       this.state = 'on'
       this.tuneReceiversForLatency()
+      // Turning the mic on is a user gesture, so it is a free chance to start
+      // any remote the browser refused earlier.
+      void this.resumePlayback()
       this.announce(true)
     } catch (err) {
       this.state = classifyError(err)
@@ -247,8 +266,9 @@ export class VoiceChat {
   destroy(): void {
     if (this.destroyed) return
     this.destroyed = true
-    for (const detach of this.remoteDetach.values()) detach()
-    this.remoteDetach.clear()
+    for (const remote of this.remotes.values()) remote.detach()
+    this.remotes.clear()
+    this.blocked.clear()
     if (this.stream) {
       this.transport.media?.removeStream(this.stream)
       stopStream(this.stream)
@@ -290,6 +310,7 @@ export class VoiceChat {
       error: this.error,
       peers,
       anyoneElseOn,
+      needsGesture: this.blocked.size > 0,
     }
   }
 
@@ -310,20 +331,47 @@ export class VoiceChat {
 
   private dropPeer(id: string): void {
     this.peers.delete(id)
-    const detach = this.remoteDetach.get(id)
-    if (detach) {
-      detach()
-      this.remoteDetach.delete(id)
-    }
+    this.remotes.get(id)?.detach()
+    this.remotes.delete(id)
+    this.blocked.delete(id)
     this.invalidate()
   }
 
   private attachRemote(stream: MediaStream, peerId: string): void {
     if (this.destroyed) return
     // A peer that re-enables its mic sends a new stream; drop the old one.
-    this.remoteDetach.get(peerId)?.()
-    this.remoteDetach.set(peerId, this.playRemote(stream, peerId))
+    this.remotes.get(peerId)?.detach()
+    const remote = this.playRemote(stream, peerId)
+    this.remotes.set(peerId, remote)
     this.tuneReceiversForLatency()
+    void this.start(peerId, remote)
+  }
+
+  /** Try to start a remote, recording whether the browser refused. */
+  private async start(peerId: string, remote: RemoteAudio): Promise<void> {
+    const ok = await remote.play()
+    if (this.destroyed || this.remotes.get(peerId) !== remote) return
+    if (ok) this.blocked.delete(peerId)
+    else this.blocked.add(peerId)
+    this.invalidate()
+  }
+
+  /**
+   * Retry every remote the browser refused to start. Must be called from a
+   * real user gesture — that is the whole point.
+   *
+   * Someone who joins to watch and never touches the screen has made no
+   * gesture at all, so iOS silently blocks their partner's voice. There is no
+   * way to detect that except to try, fail, and ask for a tap.
+   */
+  async resumePlayback(): Promise<void> {
+    const pending = [...this.blocked]
+    await Promise.all(
+      pending.map(async (peerId) => {
+        const remote = this.remotes.get(peerId)
+        if (remote) await this.start(peerId, remote)
+      }),
+    )
   }
 
   /** Announce mic state, on change or as a periodic refresh. */

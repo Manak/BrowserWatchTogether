@@ -1,4 +1,4 @@
-import type { LevelMeter } from './voiceChat'
+import type { LevelMeter, RemoteAudio } from './voiceChat'
 import { rmsOf } from './speaking'
 
 /**
@@ -80,36 +80,61 @@ export function makeMeter(stream: MediaStream): LevelMeter | null {
 }
 
 /**
- * Play a peer's microphone through a dedicated <audio> element.
+ * Play a peer's microphone through its own hidden media element.
  *
  * A separate element per peer, rather than mixing through WebAudio: it keeps
  * the browser's own echo canceller in the loop (it needs to know what is being
  * rendered), and it leaves the video element completely alone.
+ *
+ * Three details here exist entirely for iOS:
+ *
+ *  - It is a `<video>`, not an `<audio>`. WebKit has never played a remote
+ *    MediaStream reliably through an `<audio>` element; a muted-by-nothing
+ *    `<video playsinline>` carrying only an audio track does work.
+ *  - It is hidden by size and opacity, never `display: none`. iOS declines to
+ *    play media in an element that is not being displayed at all.
+ *  - Playback failure is reported rather than swallowed. A listener who never
+ *    touches the screen has made no gesture, so iOS blocks the audio; the
+ *    caller needs to know so it can ask for a tap.
  */
-export function playRemote(stream: MediaStream, peerId: string): () => void {
-  if (typeof document === 'undefined') return () => {}
-  const el = document.createElement('audio')
+export function playRemote(stream: MediaStream, peerId: string): RemoteAudio {
+  if (typeof document === 'undefined') {
+    return { play: () => Promise.resolve(true), detach: () => {} }
+  }
+
+  const el = document.createElement('video')
   el.srcObject = stream
   el.autoplay = true
+  el.setAttribute('playsinline', '')
+  el.setAttribute('webkit-playsinline', '')
   // Full volume, always. Voice is never ducked against the film, nor the film
   // against voice — the two simply mix.
   el.volume = 1
   el.muted = false
-  el.setAttribute('playsinline', '')
   el.dataset.peer = peerId
-  el.style.display = 'none'
+  // Present and laid out, but invisible. `display: none` would stop iOS
+  // playing it at all.
+  el.style.cssText =
+    'position:fixed;left:0;bottom:0;width:1px;height:1px;opacity:0;pointer-events:none;'
   document.body.appendChild(el)
-  void el.play().catch(() => {
-    // Autoplay refused until a gesture. Enabling the mic is itself a gesture,
-    // so this resolves as soon as the user opts in.
-  })
-  return () => {
-    try {
-      el.pause()
-      el.srcObject = null
-      el.remove()
-    } catch {
-      /* already gone */
-    }
+
+  return {
+    async play() {
+      try {
+        await el.play()
+        return true
+      } catch {
+        return false
+      }
+    },
+    detach() {
+      try {
+        el.pause()
+        el.srcObject = null
+        el.remove()
+      } catch {
+        /* already gone */
+      }
+    },
   }
 }

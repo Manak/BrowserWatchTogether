@@ -74,6 +74,8 @@ function setup(
   opts: {
     fail?: Error
     level?: () => number
+    /** Simulate a browser that refuses to autoplay remote audio (iOS). */
+    blockRemotePlayback?: boolean
   } = {},
 ) {
   const transport = new FakeTransport()
@@ -89,6 +91,9 @@ function setup(
     },
   }
 
+  let allowPlayback = !opts.blockRemotePlayback
+  const playAttempts: string[] = []
+
   const voice = new VoiceChat({
     transport,
     now: () => now,
@@ -96,7 +101,13 @@ function setup(
       ? () => Promise.reject(opts.fail)
       : () => Promise.resolve(asStream(stream)),
     makeMeter: () => meter,
-    playRemote: (_s, id) => () => void detached.push(id),
+    playRemote: (_s, id) => ({
+      play: () => {
+        playAttempts.push(id)
+        return Promise.resolve(allowPlayback)
+      },
+      detach: () => void detached.push(id),
+    }),
     speaking: { threshold: 0.05, attackMs: 100, releaseMs: 300 },
   })
 
@@ -105,6 +116,11 @@ function setup(
     stream,
     voice,
     detached,
+    playAttempts,
+    /** Simulate the user finally tapping, which lifts the autoplay block. */
+    allowPlayback() {
+      allowPlayback = true
+    },
     meterClosed: () => meterClosed,
     tick(ms: number) {
       now += ms
@@ -294,6 +310,68 @@ describe('peers', () => {
     s.transport.peerStream(asStream(new FakeStream()), 'bo')
     s.transport.peerStream(asStream(new FakeStream()), 'bo')
     expect(s.detached).toEqual(['bo'])
+  })
+})
+
+/**
+ * Regression: voice was inaudible on iOS. A listener who joins to watch and
+ * never touches the screen has made no user gesture, so iOS silently refuses
+ * to start their partner's audio. The old code swallowed that rejection and
+ * nothing ever retried.
+ */
+describe('when the browser refuses to autoplay remote audio', () => {
+  it('reports that a gesture is needed instead of failing silently', async () => {
+    const ios = setup({ blockRemotePlayback: true })
+    ios.transport.peerStream(asStream(new FakeStream()), 'bo')
+    await vi.waitFor(() => expect(ios.voice.getSnapshot().needsGesture).toBe(true))
+  })
+
+  it('starts the audio once a gesture arrives', async () => {
+    const ios = setup({ blockRemotePlayback: true })
+    ios.transport.peerStream(asStream(new FakeStream()), 'bo')
+    await vi.waitFor(() => expect(ios.voice.getSnapshot().needsGesture).toBe(true))
+
+    ios.allowPlayback()
+    await ios.voice.resumePlayback()
+
+    expect(ios.voice.getSnapshot().needsGesture).toBe(false)
+    expect(ios.playAttempts.filter((p) => p === 'bo').length).toBeGreaterThan(1)
+  })
+
+  it('retries every blocked peer, not just the first', async () => {
+    const ios = setup({ blockRemotePlayback: true })
+    ios.transport.peerStream(asStream(new FakeStream()), 'bo')
+    ios.transport.peerStream(asStream(new FakeStream()), 'cy')
+    await vi.waitFor(() => expect(ios.voice.getSnapshot().needsGesture).toBe(true))
+
+    ios.allowPlayback()
+    await ios.voice.resumePlayback()
+    expect(ios.voice.getSnapshot().needsGesture).toBe(false)
+  })
+
+  it('takes turning the mic on as the gesture', async () => {
+    const ios = setup({ blockRemotePlayback: true })
+    ios.transport.peerStream(asStream(new FakeStream()), 'bo')
+    await vi.waitFor(() => expect(ios.voice.getSnapshot().needsGesture).toBe(true))
+
+    ios.allowPlayback()
+    await ios.voice.enable()
+    await vi.waitFor(() => expect(ios.voice.getSnapshot().needsGesture).toBe(false))
+  })
+
+  it('clears the prompt when the blocked peer leaves', async () => {
+    const ios = setup({ blockRemotePlayback: true })
+    ios.transport.peerStream(asStream(new FakeStream()), 'bo')
+    await vi.waitFor(() => expect(ios.voice.getSnapshot().needsGesture).toBe(true))
+
+    ios.transport.peerLeft('bo')
+    expect(ios.voice.getSnapshot().needsGesture).toBe(false)
+  })
+
+  it('asks for no gesture when playback simply works', async () => {
+    s.transport.peerStream(asStream(new FakeStream()), 'bo')
+    await vi.waitFor(() => expect(s.playAttempts).toContain('bo'))
+    expect(s.voice.getSnapshot().needsGesture).toBe(false)
   })
 })
 

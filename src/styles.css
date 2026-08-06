@@ -692,6 +692,25 @@ input {
 
 /* ---------------------------------------------------------------- voice chat */
 
+/* Sits over the video, because a listener who has not touched the screen may
+   never open the side panel — and on iOS that tap is the only way to start
+   the audio at all. */
+.voice-unlock {
+  position: absolute;
+  top: 10px;
+  left: 50%;
+  z-index: 2;
+  min-height: 40px;
+  padding: 0 16px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #0b1020;
+  font-weight: 700;
+  cursor: pointer;
+  transform: translateX(-50%);
+}
+
 .voice-btn.voice-live {
   color: var(--ok);
 }

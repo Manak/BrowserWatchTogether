@@ -188,6 +188,25 @@ Echo is handled the other way round: the browser's echo canceller removes the
 film from your *outgoing* microphone, so your partner does not hear a doubled
 soundtrack. Your own playback is untouched.
 
+### 13c-bis. Getting remote voice to play on iOS at all
+
+The first version was inaudible on iOS, for three separate reasons, all fixed:
+
+- The sink element was hidden with `display: none`. iOS will not play media in
+  an element it is not displaying, so it is now sized to a transparent pixel
+  instead.
+- It was an `<audio>` element. WebKit has never played a remote MediaStream
+  reliably through one; it is now a `<video playsinline>` carrying only an
+  audio track, which does work.
+- Worst of all, the `play()` rejection was swallowed. A listener who joins to
+  watch and never touches the screen has made **no user gesture**, so iOS
+  blocks their partner's voice — and nothing retried. Blocked playback is now
+  tracked and retried on the first interaction anywhere in the page, with a
+  visible "tap to hear" prompt as the fallback for someone who touches nothing.
+
+The lesson generalises: the person who needs the gesture is the *listener*, not
+the person turning their microphone on.
+
 ### 13c. iOS is the one platform that can still quieten things ⚠️
 
 Opening a microphone on iOS switches the system audio session to a voice-call

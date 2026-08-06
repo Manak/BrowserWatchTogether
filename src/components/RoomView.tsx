@@ -76,6 +76,21 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
     video?.webkitEnterFullscreen?.()
   }, [])
 
+  // Any interaction anywhere counts as the gesture iOS is waiting for, so most
+  // people never see the "tap to hear" prompt — the first thing they touch
+  // starts the audio. The prompt is the fallback for someone who touches
+  // nothing at all.
+  useEffect(() => {
+    if (!voice) return
+    const retry = () => void voice.resumePlayback()
+    document.addEventListener('pointerdown', retry)
+    document.addEventListener('keydown', retry)
+    return () => {
+      document.removeEventListener('pointerdown', retry)
+      document.removeEventListener('keydown', retry)
+    }
+  }, [voice])
+
   // Desktop keyboard shortcuts. Ignored while typing in a field.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -145,6 +160,16 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
               muted={muted}
               volume={volume}
             />
+
+            {voice && voiceSnap.needsGesture && (
+              <button
+                className="voice-unlock"
+                type="button"
+                onClick={() => void voice.resumePlayback()}
+              >
+                Tap to hear voice chat
+              </button>
+            )}
 
             <Overlay
               snap={snap}

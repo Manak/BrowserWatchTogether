@@ -204,6 +204,11 @@ WebRTC without a TURN relay, which this app deliberately does not include (it
 would need a paid, always-on server). Try a different network or a phone
 hotspot.
 
+**No voice audio on an iPhone.** iOS will not start audio until you have
+interacted with the page, so tap anywhere — or use the "tap to hear" button if
+it appears. This applies to whoever is *listening*, even if they never turn
+their own microphone on.
+
 **Voice chat will not turn on.** It needs microphone permission and an
 `https://` page (or `localhost`). If the browser blocked it, the app says so —
 re-allow the microphone in the site settings and press Turn on again.
