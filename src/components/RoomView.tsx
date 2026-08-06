@@ -5,9 +5,13 @@ import { Controls } from './Controls'
 import { MediaPicker } from './MediaPicker'
 import { PeopleList } from './PeopleList'
 import { Player, type VideoMeta } from './Player'
+import { VoiceButton } from './VoiceButton'
+import { VoicePanel } from './VoicePanel'
+import { VOICE_OFF, type VoiceChat } from '../voice/voiceChat'
 
 interface Props {
   engine: SyncEngine
+  voice: VoiceChat | null
   roomCode: string
   name: string
   joinError: string | null
@@ -16,8 +20,12 @@ interface Props {
 
 type Tab = 'people' | 'video'
 
-export function RoomView({ engine, roomCode, name, joinError, onLeave }: Props) {
+export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: Props) {
   const snap = useSyncExternalStore(engine.subscribe, engine.getSnapshot)
+  const voiceSnap = useSyncExternalStore(
+    voice ? voice.subscribe : NO_SUBSCRIBE,
+    voice ? voice.getSnapshot : NO_VOICE,
+  )
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const stageRef = useRef<HTMLDivElement | null>(null)
 
@@ -161,6 +169,7 @@ export function RoomView({ engine, roomCode, name, joinError, onLeave }: Props) 
             onVolume={setVolume}
             onFullscreen={toggleFullscreen}
             disabled={noMedia}
+            voiceButton={<VoiceButton voice={voice} />}
           />
 
           {snap.media && (
@@ -203,13 +212,14 @@ export function RoomView({ engine, roomCode, name, joinError, onLeave }: Props) 
           <div className="panel-body">
             {tab === 'people' ? (
               <>
-                <PeopleList snap={snap} />
+                <PeopleList snap={snap} voice={voice ? voiceSnap : null} />
                 {snap.peerCount === 1 && (
                   <p className="footnote">
                     Nobody else is here yet. Share the room code
                     {' '}<strong className="code-inline">{roomCode}</strong> to invite someone.
                   </p>
                 )}
+                {voice && <VoicePanel voice={voice} />}
                 <label className="switch">
                   <input
                     type="checkbox"
@@ -259,6 +269,10 @@ export function RoomView({ engine, roomCode, name, joinError, onLeave }: Props) 
     </div>
   )
 }
+
+const NO_SUBSCRIBE = () => () => {}
+// Must return the same object every call, or useSyncExternalStore loops.
+const NO_VOICE = () => VOICE_OFF
 
 function formatDrift(drift: number): string {
   const abs = Math.abs(drift)

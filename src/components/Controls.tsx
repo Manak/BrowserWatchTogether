@@ -13,6 +13,8 @@ interface Props {
   onVolume: (v: number) => void
   onFullscreen: () => void
   disabled: boolean
+  /** Voice-chat control, rendered next to the transport buttons. */
+  voiceButton?: React.ReactNode
 }
 
 const SKIP = 10
@@ -27,6 +29,7 @@ export function Controls({
   onVolume,
   onFullscreen,
   disabled,
+  voiceButton,
 }: Props) {
   // While a finger is on the scrubber we show the finger's position, not the
   // room's, and only commit the seek on release — otherwise every pixel of
@@ -110,6 +113,7 @@ export function Controls({
         </div>
 
         <div className="controls-right">
+          {voiceButton}
           <button
             className="btn-icon"
             type="button"

@@ -1,6 +1,6 @@
 import { joinRoom, selfId } from 'trystero/nostr'
 import type { Msg } from './protocol'
-import type { Transport } from './transport'
+import type { MediaChannel, Transport } from './transport'
 
 /**
  * The real transport: a WebRTC mesh with no backend of our own.
@@ -83,8 +83,39 @@ export function createTrysteroTransport(opts: TrysteroOptions): Transport {
 
   let left = false
 
+  const streamHandlers: ((stream: MediaStream, peerId: string) => void)[] = []
+  room.onPeerStream = (stream, peerId) => {
+    for (const h of streamHandlers) h(stream, peerId)
+  }
+
+  // Voice chat rides the same peer connections as the sync messages, so there
+  // is no second connection to establish and no server in the audio path.
+  const media: MediaChannel = {
+    addStream(stream) {
+      if (left) return
+      // Returns one promise per peer; a peer that drops mid-negotiation is
+      // routine in a mesh and must not become an unhandled rejection.
+      for (const p of room.addStream(stream)) void p.catch(() => {})
+    },
+    removeStream(stream) {
+      if (left) return
+      try {
+        room.removeStream(stream)
+      } catch {
+        /* already gone */
+      }
+    },
+    onPeerStream(handler) {
+      streamHandlers.push(handler)
+    },
+    connections() {
+      return left ? {} : room.getPeers()
+    },
+  }
+
   return {
     selfId,
+    media,
 
     send(msg: Msg, target?: string) {
       if (left) return

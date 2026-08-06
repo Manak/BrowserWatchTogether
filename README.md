@@ -7,9 +7,9 @@ database, no accounts. Takes public Google Drive links, put.io links, or any
 direct video URL.
 
 Two people open the same room code, one pastes a link, and both players stay
-locked to the same frame. Play, pause, and seek propagate to everyone; if
-one person's connection stalls, the room waits for them and starts again
-together.
+locked to the same frame. Play, pause, and seek propagate to everyone; if one
+person's connection stalls, the room waits for them and starts again together.
+There is voice chat too, so you can talk over the film.
 
 ---
 
@@ -39,6 +39,13 @@ put.io serves both the original file and an H.264 conversion at the same id.
 The original is usually MKV/HEVC, which no browser plays, so a pasted
 `/files/<id>/download/…` link is switched to `/files/<id>/mp4/download/…`
 automatically.
+
+**Talking over it.** Voice chat rides the same peer connections, so there is no
+second connection and no server in the audio path. The microphone is captured
+with echo cancellation, which removes the film from your *outgoing* audio — the
+other person stops hearing a doubled soundtrack. Nothing ever turns the video
+down: the voice layer has no reference to the video element, so it cannot duck
+it even by accident, and the two streams simply mix.
 
 **Staying in sync** is the interesting part — see
 [docs/SYNC.md](docs/SYNC.md) for the algorithm.
@@ -172,7 +179,7 @@ picked up automatically.
 | `Space` / `K` | Play / pause |
 | `←` / `→` | Back / forward 10s |
 | `F` | Fullscreen |
-| `M` | Mute |
+| `M` | Mute the video |
 
 ---
 
@@ -196,6 +203,14 @@ with everyone in the room; the app warns about this when it spots one.
 WebRTC without a TURN relay, which this app deliberately does not include (it
 would need a paid, always-on server). Try a different network or a phone
 hotspot.
+
+**Voice chat will not turn on.** It needs microphone permission and an
+`https://` page (or `localhost`). If the browser blocked it, the app says so —
+re-allow the microphone in the site settings and press Turn on again.
+
+**The other person hears the film echoing back.** Echo cancellation is on by
+default and normally handles this. If it persists, it is usually speakers loud
+enough to overwhelm the canceller — headphones fix it immediately.
 
 **Everything is 20 seconds out of sync.** Check that both devices have
 automatic time enabled. The app measures and corrects clock differences, but it

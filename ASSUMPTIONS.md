@@ -175,6 +175,49 @@ headphones.
 
 ---
 
+## Voice chat
+
+### 13b. The video is never ducked, structurally
+
+You asked for no ducking. Rather than "we promise not to", the voice layer is
+built with no reference to the video element at all — there is no code path
+from a microphone to `video.volume`, so it cannot duck the film even by
+mistake. A test asserts the surface stays that way. Voice and film simply mix.
+
+Echo is handled the other way round: the browser's echo canceller removes the
+film from your *outgoing* microphone, so your partner does not hear a doubled
+soundtrack. Your own playback is untouched.
+
+### 13c. iOS is the one platform that can still quieten things ⚠️
+
+Opening a microphone on iOS switches the system audio session to a voice-call
+mode, which attenuates other audio and can move output to the earpiece. That is
+an OS decision, not ours. The app declares
+`navigator.audioSession.type = 'play-and-record'` before capturing, which is the
+supported way to ask Safari to keep both running properly, and is a no-op
+elsewhere.
+
+I could not test this on a real iPhone. If you find the film gets quiet when
+voice is on, that is where to look — and headphones sidestep it entirely.
+
+### 13d. Low latency comes from the connection, not from tuning
+
+Audio rides the peer connections that already exist, so there is no server hop.
+Beyond that the only lever worth pulling is the receiver jitter buffer:
+Chromium's `playoutDelayHint` is set to 0, asking for the smallest buffer it
+will give us. It is non-standard and simply absent in Safari and Firefox, where
+the default buffer applies.
+
+### 13e. Speaking is detected locally and announced
+
+Each peer analyses only its own microphone and broadcasts a boolean, rather than
+every peer running an analyser over every incoming stream. One small message
+beats N audio graphs, and it keeps working where a browser will not hand us an
+analyser at all. Detection is deliberately asymmetric — quick to light up,
+slow to go dark — so the indicator does not strobe between syllables.
+
+---
+
 ## Product decisions
 
 ### 14. Rooms hold no state of their own

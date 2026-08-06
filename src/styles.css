@@ -690,6 +690,68 @@ input {
   background: #5c6478;
 }
 
+/* ---------------------------------------------------------------- voice chat */
+
+.voice-btn.voice-live {
+  color: var(--ok);
+}
+.voice-btn.voice-muted {
+  color: var(--warn);
+}
+/* A ring rather than a size change, so the control never shifts the layout. */
+.voice-btn.voice-speaking {
+  box-shadow: 0 0 0 2px var(--ok);
+}
+
+.avatar-speaking {
+  box-shadow: 0 0 0 2px var(--bg-raised), 0 0 0 4px var(--ok);
+}
+
+.mic-badge {
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--bg-input);
+  color: var(--text-dim);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+.mic-badge.mic-speaking {
+  background: rgba(70, 199, 138, 0.18);
+  color: var(--ok);
+}
+.mic-badge.mic-muted {
+  background: rgba(240, 178, 60, 0.16);
+  color: var(--warn);
+}
+
+.voice-panel {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.voice-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.voice-title {
+  display: flex;
+  flex-direction: column;
+  font-weight: 600;
+}
+.voice-state {
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 400;
+}
+.voice-actions {
+  display: flex;
+  gap: 6px;
+}
+
 .switch {
   display: flex;
   gap: 10px;

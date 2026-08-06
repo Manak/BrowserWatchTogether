@@ -1,16 +1,22 @@
 import { colorForId, formatTime, initials } from '../lib/format'
 import type { PeerView, Snapshot } from '../sync/engine'
+import type { VoiceSnapshot } from '../voice/voiceChat'
 
 interface Props {
   snap: Snapshot
+  voice: VoiceSnapshot | null
 }
 
-export function PeopleList({ snap }: Props) {
+export function PeopleList({ snap, voice }: Props) {
   return (
     <ul className="people">
       {snap.peers.map((p) => (
         <li className="person" key={p.id}>
-          <span className="avatar" style={{ background: colorForId(p.id) }} aria-hidden="true">
+          <span
+            className={`avatar ${micOf(p, voice)?.speaking ? 'avatar-speaking' : ''}`}
+            style={{ background: colorForId(p.id) }}
+            aria-hidden="true"
+          >
             {initials(p.name)}
           </span>
           <span className="person-main">
@@ -22,6 +28,7 @@ export function PeopleList({ snap }: Props) {
                   host
                 </span>
               )}
+              <MicBadge mic={micOf(p, voice)} />
             </span>
             <span className="person-sub">{statusLine(p, snap)}</span>
           </span>
@@ -29,6 +36,44 @@ export function PeopleList({ snap }: Props) {
         </li>
       ))}
     </ul>
+  )
+}
+
+/** This person's voice state, or null when nobody has voice chat on. */
+function micOf(
+  p: PeerView,
+  voice: VoiceSnapshot | null,
+): { on: boolean; muted: boolean; speaking: boolean } | null {
+  if (!voice) return null
+  if (p.isSelf) {
+    return voice.state === 'on'
+      ? { on: true, muted: voice.muted, speaking: voice.speaking }
+      : null
+  }
+  const peer = voice.peers[p.id]
+  return peer?.on ? peer : null
+}
+
+function MicBadge({
+  mic,
+}: {
+  mic: { on: boolean; muted: boolean; speaking: boolean } | null
+}) {
+  if (!mic) return null
+  if (mic.muted) {
+    return (
+      <span className="mic-badge mic-muted" title="Microphone muted">
+        muted
+      </span>
+    )
+  }
+  return (
+    <span
+      className={`mic-badge ${mic.speaking ? 'mic-speaking' : ''}`}
+      title={mic.speaking ? 'Talking' : 'Microphone on'}
+    >
+      {mic.speaking ? 'talking' : 'mic'}
+    </span>
   )
 }
 

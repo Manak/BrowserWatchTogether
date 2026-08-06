@@ -2,21 +2,31 @@ import { useEffect, useRef, useState } from 'react'
 import { SyncEngine } from '../sync/engine'
 import { createTrysteroTransport } from '../sync/trysteroTransport'
 import type { Transport } from '../sync/transport'
+import { configureAudioSession, makeMeter, playRemote } from '../voice/browserAudio'
+import { VoiceChat } from '../voice/voiceChat'
 
 /** How often the engine re-evaluates drift, buffering and heartbeats. */
 const UPDATE_MS = 250
+/** Voice metering wants finer granularity than sync does. */
+const VOICE_UPDATE_MS = 100
 
 export interface RoomHandle {
   engine: SyncEngine | null
+  voice: VoiceChat | null
   joinError: string | null
 }
 
 /**
- * Owns the lifetime of one room connection. The engine is created in an effect
- * (never during render) so that joining a relay is never a render side effect.
+ * Owns the lifetime of one room connection: the transport, the sync engine and
+ * voice chat, created and torn down together. All three are built inside a
+ * single effect, so joining a relay or touching a microphone is never a render
+ * side effect, and there is exactly one teardown path.
  */
 export function useRoom(roomCode: string, initialName: string): RoomHandle {
-  const [engine, setEngine] = useState<SyncEngine | null>(null)
+  const [room, setRoom] = useState<{
+    engine: SyncEngine
+    voice: VoiceChat
+  } | null>(null)
   const [joinError, setJoinError] = useState<string | null>(null)
   // Read at connect time only; later renames go through engine.setName.
   // Declared before the connect effect so the ref is current when it runs.
@@ -27,42 +37,53 @@ export function useRoom(roomCode: string, initialName: string): RoomHandle {
 
   useEffect(() => {
     let transport: Transport | null = null
-    let created: SyncEngine | null = null
-    let timer: ReturnType<typeof setInterval> | null = null
-    let cancelled = false
+    let engine: SyncEngine | null = null
+    let voice: VoiceChat | null = null
+    const timers: ReturnType<typeof setInterval>[] = []
 
     try {
       transport = createTrysteroTransport({
         roomCode,
         onJoinError: (message) => setJoinError(message),
       })
-      created = new SyncEngine({ transport, name: nameRef.current })
-      if (cancelled) throw new Error('unmounted')
-      setEngine(created)
+      engine = new SyncEngine({ transport, name: nameRef.current })
+      // Voice rides the same peer connections; it requests nothing from the
+      // microphone until the user asks for it.
+      voice = new VoiceChat({
+        transport,
+        getUserMedia: (c) => navigator.mediaDevices.getUserMedia(c),
+        makeMeter,
+        playRemote,
+        configureAudioSession,
+      })
+
+      const e = engine
+      const v = voice
+      timers.push(
+        setInterval(() => {
+          e.update()
+          // Connecting to one peer can fail while another succeeds. Once anyone
+          // is on the line, retire the earlier complaint.
+          if (e.getSnapshot().connected) setJoinError(null)
+        }, UPDATE_MS),
+        setInterval(() => v.update(), VOICE_UPDATE_MS),
+      )
+      setRoom({ engine, voice })
       setJoinError(null)
-      const e = created
-      timer = setInterval(() => {
-        e.update()
-        // Connecting to one peer can fail while another succeeds. Once anyone
-        // is on the line, retire the earlier complaint.
-        if (e.getSnapshot().connected) setJoinError(null)
-      }, UPDATE_MS)
     } catch (err) {
       setJoinError(
-        err instanceof Error && err.message !== 'unmounted'
-          ? err.message
-          : 'Could not connect to the room.',
+        err instanceof Error ? err.message : 'Could not connect to the room.',
       )
     }
 
     return () => {
-      cancelled = true
-      if (timer) clearInterval(timer)
-      created?.destroy()
+      for (const t of timers) clearInterval(t)
+      voice?.destroy()
+      engine?.destroy()
       void transport?.leave()
-      setEngine(null)
+      setRoom(null)
     }
   }, [roomCode])
 
-  return { engine, joinError }
+  return { engine: room?.engine ?? null, voice: room?.voice ?? null, joinError }
 }

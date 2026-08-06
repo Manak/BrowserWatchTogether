@@ -539,6 +539,11 @@ export class SyncEngine {
         this.clock.forget(from)
         break
       }
+
+      case 'mic':
+        // Voice chat rides the same channel but is none of the engine's
+        // business. Handled by the voice layer.
+        break
     }
     this.invalidate()
   }

@@ -14,4 +14,21 @@ export interface Transport {
   onPeerLeave(handler: (peerId: string) => void): void
   peers(): string[]
   leave(): Promise<void>
+  /**
+   * Live audio, for voice chat. Optional: the sync engine never touches it, and
+   * the in-memory test transport does not implement it.
+   */
+  media?: MediaChannel
+}
+
+/** Sending and receiving live media tracks over the same peer connections. */
+export interface MediaChannel {
+  addStream(stream: MediaStream): void
+  removeStream(stream: MediaStream): void
+  onPeerStream(handler: (stream: MediaStream, peerId: string) => void): void
+  /**
+   * The underlying connections, so the voice layer can tune receivers for
+   * latency. Returns an empty object when unavailable.
+   */
+  connections(): Record<string, RTCPeerConnection>
 }

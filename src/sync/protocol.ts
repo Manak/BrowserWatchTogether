@@ -97,6 +97,23 @@ export interface ByeMsg {
   t: 'bye'
 }
 
+/**
+ * Voice-chat presence. Carried on the same channel as everything else, but the
+ * sync engine ignores it — only the voice layer cares.
+ *
+ * Speaking is detected locally and announced, rather than every peer analysing
+ * every incoming stream: one small message beats N audio analysers, and it
+ * keeps working when a browser will not give us an analyser at all.
+ */
+export interface MicMsg {
+  t: 'mic'
+  /** Microphone is on and being shared. */
+  on: boolean
+  /** On, but deliberately muted. */
+  muted: boolean
+  speaking: boolean
+}
+
 export type Msg =
   | HelloMsg
   | SyncMsg
@@ -106,6 +123,7 @@ export type Msg =
   | PingMsg
   | PongMsg
   | ByeMsg
+  | MicMsg
 
 // ---------------------------------------------------------------------------
 // Tuning. Defaults are chosen for the stated goal: never drift more than a few
