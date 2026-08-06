@@ -1,5 +1,7 @@
 # Watch Together
 
+**Live: https://manak.github.io/BrowserWatchTogether/**
+
 Watch a public Google Drive video in sync with someone else, on a phone or a
 laptop. No server, no database, no accounts.
 
