@@ -100,6 +100,27 @@ describe('room formation', () => {
     expect(leaders[0]).toBe('a')
   })
 
+  /**
+   * Regression: peers can briefly disagree about who leads while they are
+   * still learning about each other. A peer that pinned its anchor to its own
+   * (paused) element during that window used to freeze its target at zero and
+   * yank itself backwards until the real leader's next heartbeat.
+   */
+  it('recovers immediately after handing leadership over', () => {
+    const a = sim.add('a', 'Ada')
+    const b = sim.add('b', 'Bo')
+    a.engine.setMedia(MEDIA)
+    a.engine.play()
+
+    // Well inside a single heartbeat period, so only the fallback can help.
+    sim.run(TUNING.tickMs - 200)
+
+    expect(b.video.paused).toBe(false)
+    expect(b.video.currentTime).toBeGreaterThan(1)
+    expect(Math.abs(b.video.currentTime - a.video.currentTime)).toBeLessThan(0.5)
+    expect(b.video.seekCount).toBeLessThanOrEqual(1)
+  })
+
   it('hands leadership over when the leader leaves', () => {
     sim.add('a', 'Ada')
     sim.add('b', 'Bo')
@@ -372,6 +393,56 @@ describe('late joiners', () => {
     expect(c.engine.getSnapshot().media?.url).toBe(MEDIA.url)
     expect(Math.abs(c.video.currentTime - a.video.currentTime)).toBeLessThan(1)
     expect(c.video.paused).toBe(false)
+  })
+
+  // Regression: caught by running two real browser tabs. Leadership goes to
+  // the lowest peer id, so a newcomer can become leader the moment it arrives.
+  // If only the leader hands out state, nobody ever tells it what is playing.
+  it('catches up a newcomer that outranks the existing room', () => {
+    const z = sim.add('z', 'Zoe')
+    z.engine.setMedia(MEDIA)
+    z.engine.play()
+    sim.run(20_000)
+
+    // 'a' sorts below 'z', so it becomes leader on arrival.
+    const a = sim.add('a', 'Ada')
+    sim.run(4000)
+
+    expect(a.engine.getSnapshot().media?.url).toBe(MEDIA.url)
+    expect(Math.abs(a.video.currentTime - z.video.currentTime)).toBeLessThan(1)
+  })
+
+  it('does not let an unloaded newcomer drag the room back to the start', () => {
+    const z = sim.add('z', 'Zoe')
+    z.engine.setMedia(MEDIA)
+    z.engine.play()
+    sim.run(30_000)
+    const before = z.video.currentTime
+    expect(before).toBeGreaterThan(25)
+
+    // Joins with the lowest id but nothing loaded: it must not become the
+    // timing authority and heartbeat a playhead of zero.
+    const a = sim.add('a', 'Ada')
+    a.video.downloadRate = 0
+    a.video.bufferEnd = 0
+    sim.run(6000)
+
+    expect(z.video.currentTime).toBeGreaterThan(before)
+    expect(z.engine.getSnapshot().leaderId).toBe('z')
+  })
+
+  it('hands leadership over once the newcomer has the media open', () => {
+    const z = sim.add('z', 'Zoe')
+    z.engine.setMedia(MEDIA)
+    z.engine.play()
+    sim.run(10_000)
+
+    const a = sim.add('a', 'Ada')
+    sim.run(6000)
+
+    expect(z.engine.getSnapshot().leaderId).toBe('a')
+    expect(a.engine.getSnapshot().isLeader).toBe(true)
+    expect(sim.spread()).toBeLessThan(0.6)
   })
 
   it('catches a newcomer up while the room is paused', () => {

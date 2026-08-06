@@ -71,6 +71,11 @@ export interface ReadyMsg {
   buffered: number
   time: number
   ended: boolean
+  /**
+   * Whether this peer has the room's media open at all. A peer that has not
+   * loaded anything cannot be the timing authority — its playhead is 0.
+   */
+  loaded: boolean
 }
 
 export interface PingMsg {

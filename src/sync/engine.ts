@@ -77,6 +77,7 @@ interface PeerRecord {
   buffered: number
   time: number
   ended: boolean
+  loaded: boolean
   lastSeen: number
 }
 
@@ -125,6 +126,7 @@ export class SyncEngine {
   private pingSeq = 0
   private readonly pending = new Map<number, { peerId: string; t0: number }>()
 
+  private wasLeader = false
   private needsGesture = false
   private destroyed = false
   private playAttempt: Promise<void> | null = null
@@ -195,7 +197,11 @@ export class SyncEngine {
       this.pingAll(now)
     }
 
-    if (this.isLeader() && now - this.lastTickSent >= this.tuning.tickMs) {
+    const leading = this.isLeader()
+    if (this.wasLeader && !leading) this.onLostLeadership()
+    this.wasLeader = leading
+
+    if (leading && now - this.lastTickSent >= this.tuning.tickMs) {
       this.lastTickSent = now
       this.sendTick(now)
     }
@@ -357,14 +363,36 @@ export class SyncEngine {
   // Leadership
   // -------------------------------------------------------------------------
 
+  /** Can this peer's playhead be trusted as the room's reference? */
+  private selfCanLead(): boolean {
+    if (!this.media) return true
+    return !!this.el && this.el.readyState >= HAVE_CURRENT_DATA
+  }
+
   /**
-   * Deterministic and message-free: the lexicographically smallest peer id in
-   * the room leads. Every peer computes the same answer from the same set, so
-   * handover on disconnect is instant and needs no election.
+   * Deterministic and message-free: the lexicographically smallest peer id
+   * leads, so every peer computes the same answer from the same set and
+   * handover on disconnect is instant with no election traffic.
+   *
+   * Restricted to peers that actually have the media open. Without that, a
+   * newcomer with a small id would take over the moment it joined and
+   * heartbeat a playhead of zero, dragging everyone back to the start.
    */
   private leaderId(): string {
-    let min = this.transport.selfId
-    for (const id of this.peers.keys()) if (id < min) min = id
+    const now = this.now()
+    const eligible: string[] = []
+    const all: string[] = [this.transport.selfId]
+    if (this.selfCanLead()) eligible.push(this.transport.selfId)
+
+    for (const p of this.peers.values()) {
+      if (now - p.lastSeen > this.tuning.peerTimeoutMs) continue
+      all.push(p.id)
+      if (!this.media || p.loaded) eligible.push(p.id)
+    }
+
+    const pool = eligible.length > 0 ? eligible : all
+    let min = pool[0] as string
+    for (const id of pool) if (id < min) min = id
     return min
   }
 
@@ -401,6 +429,7 @@ export class SyncEngine {
         buffered: 0,
         time: 0,
         ended: false,
+        loaded: false,
         lastSeen: this.now(),
       }
       this.peers.set(id, rec)
@@ -422,8 +451,10 @@ export class SyncEngine {
             from,
           )
         }
-        // The leader owns the canonical state, so it catches newcomers up.
-        if (this.isLeader()) {
+        // Catch the newcomer up. Anyone holding state answers, not just the
+        // leader: leadership is decided by peer id, so a newcomer can become
+        // leader the instant it arrives while knowing nothing at all.
+        if (msg.reply && this.playback.seq > 0) {
           this.transport.send(
             {
               t: 'sync',
@@ -439,9 +470,9 @@ export class SyncEngine {
       }
 
       case 'sync': {
-        // Only accept a catch-up from the leader, and only if it is not stale.
-        if (from !== this.leaderId()) break
-        if (msg.playback.seq < this.playback.seq) break
+        // Accept from anyone, but only if they genuinely know more than we do.
+        // The control epoch is the measure of "more recent".
+        if (msg.playback.seq <= this.playback.seq) break
         this.media = msg.media
         this.waitForEveryone = msg.waitForEveryone
         this.adoptPlayback(msg.playback)
@@ -478,6 +509,7 @@ export class SyncEngine {
         rec.buffered = msg.buffered
         rec.time = msg.time
         rec.ended = msg.ended
+        rec.loaded = msg.loaded
         break
       }
 
@@ -505,6 +537,24 @@ export class SyncEngine {
       }
     }
     this.invalidate()
+  }
+
+  /**
+   * While leading, our anchor points at our own element. The moment someone
+   * else takes over, that anchor is meaningless — and worse, if we happened to
+   * be paused when we wrote it, our target would freeze and drag us backwards
+   * on every update until the new leader's first heartbeat.
+   *
+   * So fall back to the last control event, which every peer agrees on, and
+   * let the incoming heartbeats refine it from there.
+   */
+  private onLostLeadership(): void {
+    this.anchor = this.localizeAnchor({
+      time: this.playback.time,
+      at: this.playback.at,
+      origin: this.playback.origin,
+      advancing: this.playback.playing,
+    })
   }
 
   private pingAll(now: number): void {
@@ -547,6 +597,7 @@ export class SyncEngine {
       buffered: this.selfBuffered(),
       time: this.currentTime(),
       ended: !!this.el?.ended,
+      loaded: this.selfCanLead(),
     })
   }
 

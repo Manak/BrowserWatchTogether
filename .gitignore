@@ -5,3 +5,6 @@ coverage
 *.log
 .vite
 .netlify
+
+# Locally generated test fixture (see npm run sample:video)
+public/sample.mp4
