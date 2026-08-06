@@ -117,12 +117,17 @@ CI runs typecheck → lint → test → build on every push
 
 Every push to `main` triggers
 [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml), which runs the
-full check suite and force-pushes the build output to the **`web`** branch. That
-branch contains only generated files and is replaced wholesale each time, so it
-never accumulates a history nobody reads.
+full check suite, force-pushes the build output to the **`web`** branch, and
+deploys it. That branch contains only generated files and is replaced wholesale
+each time, so it never accumulates a history nobody reads.
 
-One-time setup: **Settings → Pages → Source → Deploy from a branch → `web` →
-`/ (root)`**.
+One-time setup: **Settings → Pages → Source → GitHub Actions**.
+
+The `web` branch exists so the deployed files are inspectable as ordinary
+files, but Pages deploys the artifact from this workflow rather than building
+from the branch. Branch mode makes GitHub run its own auto-generated builder,
+which is opaque when it fails and races with this workflow over the same
+commit — one workflow means one deployment and one place to look.
 
 The site then lives at `https://manak.github.io/BrowserWatchTogether/`.
 
