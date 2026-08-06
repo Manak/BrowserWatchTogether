@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
-import { formatTime } from '../lib/format'
 import { roomUrl } from '../lib/roomCode'
 import type { SyncEngine } from '../sync/engine'
 import { Controls } from './Controls'
@@ -354,16 +353,6 @@ function Overlay({
               : 'Buffering'}
           </p>
           <p className="overlay-sub">Everyone starts again together.</p>
-        </div>
-      </div>
-    )
-  }
-
-  if (!snap.intentPlaying && snap.targetTime === 0) {
-    return (
-      <div className="overlay overlay-soft overlay-quiet">
-        <div className="overlay-inner">
-          <p className="overlay-sub">Ready · {formatTime(snap.targetTime)}</p>
         </div>
       </div>
     )
