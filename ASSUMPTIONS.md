@@ -26,6 +26,17 @@ import change — Trystero ships all of them); point it at your own Nostr relay;
 or move signalling to a Netlify function with a small KV store. `netlify.toml`
 is already in the repo for that path.
 
+### 1b. Signalling relays are pinned to a curated list
+
+Trystero's default is to sample from dozens of community Nostr relays, and
+several are frequently down. A dead relay retries forever — console noise on a
+laptop, wasted battery and mobile data on a phone. So the app pins six
+long-running relays (all verified reachable) and connects to four at a time.
+
+Only one needs to work: peers match through whichever relays they have in
+common, and once WebRTC connects the relays are not used again for that pair.
+The list is at the top of `src/sync/trysteroTransport.ts`.
+
 ### 2. No TURN server, so a few networks will fail ⚠️
 
 STUN (free, Google/Cloudflare) handles most home networks. Symmetric NATs and
@@ -196,8 +207,14 @@ add — the transport carries arbitrary messages already.
   tap-to-start gate for autoplay policy, 16px inputs so iOS does not zoom,
   44px tap targets, safe-area insets, the iOS-only fullscreen fallback). But
   that is not the same as having held a phone.
-- **Two people on different networks.** Everything so far was two tabs on one
-  machine. NAT traversal is the untested part.
+- **Two people on different networks.** Everything so far was browser tabs on
+  one machine. NAT traversal is the untested part.
+
+One thing worth knowing: during testing a third peer once failed its initial
+WebRTC handshake and recovered on reload. Peer connection is inherently
+best-effort, so the app now treats a join error as per-peer rather than fatal —
+the status only reports trouble when you are genuinely talking to nobody, and it
+clears itself the moment anyone connects.
 
 ---
 

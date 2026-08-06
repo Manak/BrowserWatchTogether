@@ -41,7 +41,12 @@ export function useRoom(roomCode: string, initialName: string): RoomHandle {
       setEngine(created)
       setJoinError(null)
       const e = created
-      timer = setInterval(() => e.update(), UPDATE_MS)
+      timer = setInterval(() => {
+        e.update()
+        // Connecting to one peer can fail while another succeeds. Once anyone
+        // is on the line, retire the earlier complaint.
+        if (e.getSnapshot().connected) setJoinError(null)
+      }, UPDATE_MS)
     } catch (err) {
       setJoinError(
         err instanceof Error && err.message !== 'unmounted'

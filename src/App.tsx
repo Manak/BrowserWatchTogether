@@ -87,8 +87,11 @@ function RoomConnection({
           {joinError ? (
             <>
               <p className="error" role="alert">
-                {joinError}
+                Couldn&rsquo;t reach the other person. Some networks block direct
+                connections between browsers — try a different Wi-Fi network or a
+                phone hotspot.
               </p>
+              <p className="footnote">{joinError}</p>
               <button className="btn btn-block" type="button" onClick={onLeave}>
                 Back
               </button>

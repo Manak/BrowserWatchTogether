@@ -16,6 +16,28 @@ export const APP_ID = 'browser-watch-together'
 /** Trystero caps action names at 32 bytes. */
 const ACTION = 'wt'
 
+/**
+ * Trystero's default list samples from dozens of community relays, several of
+ * which are frequently down — a dead one retries forever, which is console
+ * noise on a laptop and wasted battery and mobile data on a phone.
+ *
+ * These are the long-running, high-uptime public relays, all verified
+ * reachable from a browser. We only need one to work: peers are matched
+ * through whichever relays they have in common, and once WebRTC connects the
+ * relays are not used again for that pair.
+ */
+const RELAY_URLS = [
+  'wss://relay.damus.io',
+  'wss://nos.lol',
+  'wss://relay.primal.net',
+  'wss://offchain.pub',
+  'wss://relay.snort.social',
+  'wss://nostr.mom',
+]
+
+/** How many of the above to hold connections to at once. */
+const RELAY_REDUNDANCY = 4
+
 export interface TrysteroOptions {
   roomCode: string
   onJoinError?: (message: string) => void
@@ -28,6 +50,13 @@ export function createTrysteroTransport(opts: TrysteroOptions): Transport {
       // Encrypts the signalling payloads with the room code, so relay operators
       // cannot read them. The code is the shared secret; treat it like one.
       password: opts.roomCode,
+      relayConfig: {
+        urls: RELAY_URLS,
+        redundancy: RELAY_REDUNDANCY,
+        // We surface connection trouble in the UI; a single flaky relay out of
+        // several is normal and not worth shouting about.
+        warnOnRelayFailure: false,
+      },
       rtcConfig: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },

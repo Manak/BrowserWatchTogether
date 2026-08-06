@@ -274,7 +274,15 @@ function StatusChip({
   snap: ReturnType<SyncEngine['getSnapshot']>
   joinError: string | null
 }) {
-  if (joinError) return <span className="chip chip-bad">Connection problem</span>
+  // A join error is per-peer and often transient. If we are talking to
+  // somebody, the room is working — do not cry wolf about it.
+  if (joinError && !snap.connected) {
+    return (
+      <span className="chip chip-bad" title={joinError}>
+        Couldn&rsquo;t reach anyone
+      </span>
+    )
+  }
   if (snap.gated && snap.waitingFor.length > 0) {
     return <span className="chip chip-warn">Waiting for {snap.waitingFor.join(', ')}</span>
   }
