@@ -6,6 +6,7 @@ import { MediaPicker } from './MediaPicker'
 import { PeopleList } from './PeopleList'
 import { Player, type VideoMeta } from './Player'
 import { Toasts } from './Toasts'
+import { useImmersive } from '../hooks/useImmersive'
 import { VoiceButton } from './VoiceButton'
 import { VoicePanel } from './VoicePanel'
 import { VOICE_OFF, type VoiceChat } from '../voice/voiceChat'
@@ -60,24 +61,7 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
     }
   }
 
-  const toggleFullscreen = useCallback(() => {
-    const player = playerRef.current
-    const video = videoRef.current as
-      | (HTMLVideoElement & { webkitEnterFullscreen?: () => void })
-      | null
-    if (document.fullscreenElement) {
-      void document.exitFullscreen()
-      return
-    }
-    if (player?.requestFullscreen) {
-      void player.requestFullscreen().catch(() => video?.webkitEnterFullscreen?.())
-      return
-    }
-    // iPhone Safari only allows the video element itself to go fullscreen, so
-    // there we get Apple's native controls instead of ours. The engine adopts
-    // whatever they do (see Player), so the room stays in sync either way.
-    video?.webkitEnterFullscreen?.()
-  }, [])
+  const immersive = useImmersive(playerRef, snap.effectivePlaying)
 
   // Any interaction anywhere counts as the gesture iOS is waiting for, so most
   // people never see the "tap to hear" prompt — the first thing they touch
@@ -114,7 +98,7 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
           engine.nudge(10)
           break
         case 'f':
-          toggleFullscreen()
+          immersive.toggle()
           break
         case 'm':
           setMuted((v) => !v)
@@ -123,7 +107,7 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [engine, toggleFullscreen])
+  }, [engine, immersive])
 
   const noMedia = !snap.media
   const showPicker = noMedia || changing
@@ -155,7 +139,15 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
         <section className="stage-wrap">
           {/* Video and controls share one element, so going fullscreen takes
               the controls with it instead of leaving them behind. */}
-          <div className="player" ref={playerRef}>
+          <div
+            className={`player${immersive.active ? ' player-immersive' : ''}${
+              immersive.fauxFullscreen ? ' player-faux' : ''
+            }${immersive.active && !immersive.controlsVisible ? ' player-idle' : ''}`}
+            ref={playerRef}
+            onPointerMove={immersive.wake}
+            onPointerDown={immersive.wake}
+            onTouchStart={immersive.wake}
+          >
             <div className="stage">
               <Player
               engine={engine}
@@ -168,6 +160,17 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
               />
 
               <Toasts engine={engine} muted={muted} />
+
+              {immersive.fauxFullscreen && (
+                <button
+                  className="immersive-exit"
+                  type="button"
+                  aria-label="Exit fullscreen"
+                  onClick={immersive.exit}
+                >
+                  ✕
+                </button>
+              )}
 
               {voice && voiceSnap.needsGesture && (
                 <button
@@ -200,7 +203,7 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
               volume={volume}
               onMuted={setMuted}
               onVolume={setVolume}
-              onFullscreen={toggleFullscreen}
+              onFullscreen={immersive.toggle}
               disabled={noMedia}
               voiceButton={<VoiceButton voice={voice} />}
             />

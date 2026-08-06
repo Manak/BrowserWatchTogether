@@ -183,7 +183,7 @@ chime follows the video's mute button.
 | --- | --- |
 | `Space` / `K` | Play / pause |
 | `←` / `→` | Back / forward 10s |
-| `F` | Fullscreen |
+| `F` | Fullscreen (`Esc` to leave) |
 | `M` | Mute the video |
 
 ---
@@ -208,6 +208,10 @@ with everyone in the room; the app warns about this when it spots one.
 WebRTC without a TURN relay, which this app deliberately does not include (it
 would need a paid, always-on server). Try a different network or a phone
 hotspot.
+
+**My phone locked and the room lost me.** It should recover on its own within
+a few seconds of unlocking — iOS tears down the connection while the screen is
+off, and the app rebuilds it on waking. If it does not, reload the page.
 
 **Voice chat asked for my microphone and I did not want it.** Turn it off in
 the panel; the choice is remembered and it will not ask again.

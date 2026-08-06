@@ -273,14 +273,44 @@ through 30s, six attempts), restoring the playhead each time, before showing an
 error. Any other error code still fails immediately — a file that is not shared
 publicly will not fix itself by being asked again.
 
+### 13j. Locking a phone used to end the room silently ⚠️
+
+Reported from real use: lock the phone, and the desktop sees you leave; unlock,
+and the phone still believes it is in the room while the desktop cannot see it.
+Neither side ever retried.
+
+Two things were wrong. iOS suspends the page and tears down the WebRTC
+connections while it sleeps, and nothing detected that on waking. And when a
+rebuild was attempted, **Trystero returns the existing room object if you join
+an id it still has registered** — it only deregisters inside `leave()`, which
+we were firing without awaiting. So the "reconnect" handed back the very dead
+connection it was replacing.
+
+Now: a watchdog rebuilds the connection when a room that *has* worked loses
+every peer, with backoff so an empty room does not thrash, and faster after a
+wake because that is the common case. The rebuild waits for the previous
+`leave()` to finish deregistering. Verified end to end — a peer lost and
+rediscovered on a rebuilt transport.
+
+The conservative part is deliberate: a room that has never had anyone in it is
+not considered broken, so sitting alone waiting for someone will not tear down
+the video you just queued.
+
 ### 13i. Native controls are adopted, not fought
 
-On an iPhone only the video element can go fullscreen, so you get Apple's
-player and its controls rather than ours. Those change the element directly,
-which used to desync the room silently. The engine now adopts external play,
-pause and seek, ignoring anything that lands within a beat of a change it made
-itself. This also covers lock-screen buttons, headset controls and
-picture-in-picture.
+iPhone has no Fullscreen API for anything but a `<video>`, and using it hands
+the screen to Apple's player — losing our controls, the participant list and
+the join notices. So on iPhone the player expands to fill the viewport itself
+and **keeps our own UI**. Everywhere else the real Fullscreen API is used.
+
+Either way the engine now adopts play, pause and seek made outside our
+controls, which used to desync the room silently. It ignores anything landing
+within a beat of a change it made itself. This also covers lock-screen buttons,
+headset controls and picture-in-picture.
+
+Controls auto-hide after three seconds of stillness while playing, timed in JS
+because `:hover` is always true once the player covers the screen and so can
+never express "idle".
 
 ---
 

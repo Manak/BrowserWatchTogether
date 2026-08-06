@@ -385,105 +385,73 @@ input {
   background: #000;
 }
 
-/* Fullscreen: the video fills the screen and the controls float over it,
-   rather than the controls being left behind outside the fullscreen element. */
-.player:fullscreen {
+/* Immersive: the video fills the screen and the controls float over it.
+   Covers both the real Fullscreen API and, on iPhone where that API does not
+   exist for anything but a <video>, our own expanded layout. */
+.player-immersive {
   height: 100%;
   background: #000;
 }
-.player:fullscreen .stage {
+
+/* iPhone has no Fullscreen API, so we cover the viewport ourselves and keep
+   our own controls rather than handing the screen to Apple's player. */
+.player-faux {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  height: 100dvh;
+}
+
+.player-immersive .stage {
   flex: 1;
   aspect-ratio: auto;
   min-height: 0;
 }
-.player:fullscreen .controls {
+
+.player-immersive .controls {
   position: absolute;
   right: 0;
   bottom: 0;
   left: 0;
+  padding-right: max(8px, env(safe-area-inset-right));
   padding-bottom: max(10px, env(safe-area-inset-bottom));
+  padding-left: max(8px, env(safe-area-inset-left));
   border: 0;
   background: linear-gradient(to top, rgba(0, 0, 0, 0.85), rgba(0, 0, 0, 0));
-}
-/* Controls hide with the cursor, and come back on any movement or touch. */
-.player:fullscreen:not(:hover) .controls {
-  opacity: 0;
-  transition: opacity 0.4s ease 1.5s;
-}
-.player:fullscreen .controls {
   opacity: 1;
-  transition: opacity 0.15s ease;
-}
-@media (pointer: coarse) {
-  /* No hover on a touch screen, so never hide them. */
-  .player:fullscreen:not(:hover) .controls {
-    opacity: 1;
-  }
+  transition: opacity 0.2s ease;
 }
 
-.video {
-  display: block;
-  width: 100%;
-  height: 100%;
-  background: #000;
-  object-fit: contain;
-}
-
-.overlay {
-  position: absolute;
-  inset: 0;
-  display: grid;
-  place-items: center;
-  width: 100%;
-  padding: 20px;
-  border: 0;
-  background: rgba(9, 11, 16, 0.86);
-  color: var(--text);
-  text-align: center;
-}
-.overlay-soft {
-  background: rgba(9, 11, 16, 0.55);
-}
-.overlay-quiet {
-  background: transparent;
+/* Timed in JS, because `:hover` is always true once the player covers the
+   whole screen and so can never express "idle". */
+.player-idle .controls {
+  opacity: 0;
   pointer-events: none;
 }
-.overlay-tap {
-  cursor: pointer;
-}
-.overlay-inner {
-  max-width: 360px;
-}
-.overlay-title {
-  margin: 0 0 6px;
-  font-size: 19px;
-  font-weight: 700;
-}
-.overlay-sub {
-  margin: 0 0 14px;
-  color: var(--text-dim);
-  font-size: 14px;
+.player-idle {
+  cursor: none;
 }
 
-.spinner {
-  display: block;
-  width: 30px;
-  height: 30px;
-  margin: 0 auto 12px;
-  border: 3px solid rgba(255, 255, 255, 0.18);
-  border-top-color: var(--accent);
+.immersive-exit {
+  position: absolute;
+  top: max(10px, env(safe-area-inset-top));
+  right: max(10px, env(safe-area-inset-right));
+  z-index: 4;
+  display: grid;
+  place-items: center;
+  width: var(--tap);
+  height: var(--tap);
+  border: 0;
   border-radius: 50%;
-  animation: spin 0.9s linear infinite;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 18px;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
 }
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .spinner {
-    animation-duration: 2.5s;
-  }
+.player-idle .immersive-exit {
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* ------------------------------------------------------------------ controls */
