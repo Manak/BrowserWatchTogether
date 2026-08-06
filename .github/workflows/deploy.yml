@@ -1,22 +1,21 @@
-name: Deploy to GitHub Pages
+name: Build and publish to web branch
 
 on:
   push:
     branches: [main]
   workflow_dispatch:
 
+# Needed to force-push the build output to the `web` branch.
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
-# Never publish a half-finished deploy over a working one.
+# Never let two deploys race to overwrite `web`.
 concurrency:
-  group: pages
+  group: publish-web
   cancel-in-progress: false
 
 jobs:
-  build:
+  publish:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -34,21 +33,34 @@ jobs:
       - run: npm run test
       - run: npx vite build
 
-      # Pages serves 404.html for unknown paths. The app routes on the hash,
-      # so this only matters if someone lands on a stale deep link.
-      - run: cp dist/index.html dist/404.html
+      - name: Prepare for GitHub Pages
+        run: |
+          # Pages serves 404.html for unknown paths. Routing is hash-based, so
+          # this only matters for stale deep links.
+          cp dist/index.html dist/404.html
+          # Stop Pages running the output through Jekyll.
+          touch dist/.nojekyll
 
-      - uses: actions/configure-pages@v5
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: dist
+      # `web` holds only build output, so each deploy replaces it wholesale.
+      # Force-pushing an orphan commit keeps the branch from accumulating a
+      # history of generated files nobody will ever read.
+      - name: Publish to web branch
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd dist
+          git init -q -b web
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Build ${GITHUB_SHA::7} from ${GITHUB_REF_NAME}"
+          git push -f \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            web:web
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Summary
+        run: |
+          echo "Published \`web\` from ${GITHUB_SHA::7}." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Pages must be set to **Deploy from a branch → web → / (root)**." \
+            >> $GITHUB_STEP_SUMMARY

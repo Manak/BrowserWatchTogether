@@ -115,12 +115,23 @@ CI runs typecheck → lint → test → build on every push
 
 ### GitHub Pages (recommended — the app has no backend)
 
-Push to `main`. [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
-runs the full check suite and publishes `dist/`. Enable it once under
-**Settings → Pages → Source → GitHub Actions**.
+Every push to `main` triggers
+[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml), which runs the
+full check suite and force-pushes the build output to the **`web`** branch. That
+branch contains only generated files and is replaced wholesale each time, so it
+never accumulates a history nobody reads.
+
+One-time setup: **Settings → Pages → Source → Deploy from a branch → `web` →
+`/ (root)`**.
+
+The site then lives at `https://manak.github.io/BrowserWatchTogether/`.
 
 The build uses relative asset paths, so it works at both
 `user.github.io/repo/` and a custom domain with no configuration.
+
+Note that the workflow builds from a clean checkout, so `public/sample.mp4` —
+which is gitignored and only exists locally — is never published. Deploys are
+reproducible from the repo alone.
 
 ### Netlify
 
