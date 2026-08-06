@@ -180,6 +180,16 @@ input {
   margin-bottom: 0;
 }
 
+.warn {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border: 1px solid rgba(240, 178, 60, 0.4);
+  border-radius: var(--radius);
+  background: rgba(240, 178, 60, 0.1);
+  color: #ffdfa6;
+  font-size: 13px;
+}
+
 .footnote {
   margin: 14px 0 0;
   color: var(--text-dim);

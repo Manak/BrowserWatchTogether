@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import type { MediaRef } from '../lib/drive'
+import type { MediaRef } from '../lib/media'
 import { FakeVideo } from '../testing/fakeVideo'
 import { MemoryNetwork } from '../testing/memoryNetwork'
 import { SyncEngine } from './engine'

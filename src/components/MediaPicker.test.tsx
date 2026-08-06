@@ -1,13 +1,13 @@
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { checkDriveIsPublic } from '../lib/drive'
-import type * as DriveModule from '../lib/drive'
+import { checkDriveIsPublic } from '../lib/media'
+import type * as DriveModule from '../lib/media'
 import { MediaPicker } from './MediaPicker'
 
 // The real probe loads an <img> from Google; stub it so the tests are offline
-// and deterministic. Everything else in ../lib/drive stays real.
-vi.mock('../lib/drive', async (importOriginal) => {
+// and deterministic. Everything else in ../lib/media stays real.
+vi.mock('../lib/media', async (importOriginal) => {
   const actual = await importOriginal<typeof DriveModule>()
   return { ...actual, checkDriveIsPublic: vi.fn() }
 })
@@ -22,7 +22,7 @@ describe('MediaPicker', () => {
     const onPick = vi.fn()
     render(<MediaPicker name="Ada" current={null} onPick={onPick} />)
 
-    await userEvent.type(screen.getByLabelText(/google drive link/i), 'not a link')
+    await userEvent.type(screen.getByLabelText(/video link/i), 'not a link')
     await userEvent.click(screen.getByRole('button', { name: /load video/i }))
 
     expect(await screen.findByRole('alert')).toHaveTextContent(/whole google drive url/i)
@@ -32,7 +32,7 @@ describe('MediaPicker', () => {
   it('explains that a folder link is not a video', async () => {
     render(<MediaPicker name="Ada" current={null} onPick={vi.fn()} />)
     await userEvent.type(
-      screen.getByLabelText(/google drive link/i),
+      screen.getByLabelText(/video link/i),
       'https://drive.google.com/drive/folders/1A2b3C4d5E6f7G8h9I0jKlMnOpQrStUv',
     )
     await userEvent.click(screen.getByRole('button', { name: /load video/i }))
@@ -44,7 +44,7 @@ describe('MediaPicker', () => {
     probe.mockResolvedValue({ status: 'not-public' })
     render(<MediaPicker name="Ada" current={null} onPick={onPick} />)
 
-    await userEvent.type(screen.getByLabelText(/google drive link/i), LINK)
+    await userEvent.type(screen.getByLabelText(/video link/i), LINK)
     await userEvent.click(screen.getByRole('button', { name: /load video/i }))
 
     const alert = await screen.findByRole('alert')
@@ -62,7 +62,7 @@ describe('MediaPicker', () => {
     probe.mockResolvedValue({ status: 'public' })
     render(<MediaPicker name="Ada" current={null} onPick={onPick} />)
 
-    await userEvent.type(screen.getByLabelText(/google drive link/i), LINK)
+    await userEvent.type(screen.getByLabelText(/video link/i), LINK)
     await userEvent.type(screen.getByLabelText(/title/i), 'Our film')
     await userEvent.click(screen.getByRole('button', { name: /load video/i }))
 
@@ -77,7 +77,7 @@ describe('MediaPicker', () => {
     probe.mockResolvedValue({ status: 'unknown' })
     render(<MediaPicker name="Ada" current={null} onPick={onPick} />)
 
-    await userEvent.type(screen.getByLabelText(/google drive link/i), LINK)
+    await userEvent.type(screen.getByLabelText(/video link/i), LINK)
     await userEvent.click(screen.getByRole('button', { name: /load video/i }))
 
     await vi.waitFor(() => expect(onPick).toHaveBeenCalled())
@@ -88,7 +88,7 @@ describe('MediaPicker', () => {
     probe.mockResolvedValue({ status: 'not-public' })
     render(<MediaPicker name="Ada" current={null} onPick={onPick} />)
 
-    await userEvent.type(screen.getByLabelText(/google drive link/i), LINK)
+    await userEvent.type(screen.getByLabelText(/video link/i), LINK)
     await userEvent.click(screen.getByRole('button', { name: /load video/i }))
     await screen.findByRole('alert')
     await userEvent.click(screen.getByRole('button', { name: /try it anyway/i }))
@@ -101,7 +101,7 @@ describe('MediaPicker', () => {
     render(<MediaPicker name="Ada" current={null} onPick={onPick} />)
 
     await userEvent.type(
-      screen.getByLabelText(/google drive link/i),
+      screen.getByLabelText(/video link/i),
       'https://example.com/movie.mp4',
     )
     await userEvent.click(screen.getByRole('button', { name: /load video/i }))

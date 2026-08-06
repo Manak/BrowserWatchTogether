@@ -107,7 +107,7 @@ describe('inside a room', () => {
     render(<App />)
     await findRoomChip()
     await userEvent.click(screen.getByRole('button', { name: /add a video/i }))
-    expect(screen.getByLabelText(/google drive link/i)).toBeInTheDocument()
+    expect(screen.getByLabelText(/video link/i)).toBeInTheDocument()
   })
 
   it('leaves the room and returns to the lobby', async () => {

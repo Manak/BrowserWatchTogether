@@ -1,5 +1,5 @@
 import { useEffect, useRef, type RefObject } from 'react'
-import { describeMediaError, type MediaRef } from '../lib/drive'
+import { describeMediaError, type MediaRef } from '../lib/media'
 import type { SyncEngine } from '../sync/engine'
 
 export interface VideoMeta {

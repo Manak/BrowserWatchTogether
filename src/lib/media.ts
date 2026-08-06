@@ -12,7 +12,7 @@
  * seeking work in a plain <video> element.
  */
 
-export type MediaKind = 'drive' | 'direct'
+export type MediaKind = 'drive' | 'putio' | 'direct'
 
 export interface MediaRef {
   kind: MediaKind
@@ -30,6 +30,7 @@ export interface MediaRef {
 
 export type ParseResult =
   | { ok: true; kind: 'drive'; fileId: string }
+  | { ok: true; kind: 'putio'; url: string; converted: boolean }
   | { ok: true; kind: 'direct'; url: string }
   | { ok: false; error: string }
 
@@ -100,8 +101,66 @@ export function parseMediaLink(raw: string): ParseResult {
     }
   }
 
-  // Non-Drive host: allow it, but only if it looks like a media file or stream.
+  if (host === 'put.io' || host === 'api.put.io' || host.endsWith('.put.io')) {
+    return parsePutio(url)
+  }
+
+  // Any other host: hand the URL straight to <video> and let it decide.
   return { ok: true, kind: 'direct', url: url.toString() }
+}
+
+/**
+ * put.io serves two things at the same file id:
+ *
+ *   /files/<id>/download/<name>       the original, often MKV/HEVC, which no
+ *                                     browser will play
+ *   /files/<id>/mp4/download/<name>   put.io's H.264 + AAC conversion, which
+ *                                     every browser plays
+ *
+ * People copy the first one, so prefer the second automatically rather than
+ * handing the user an unexplained "can't play this file".
+ */
+export function parsePutio(url: URL): ParseResult {
+  const m = /\/files\/(\d+)\/(mp4\/)?download\b/.exec(url.pathname)
+  if (!m) {
+    // Some other put.io URL (a browse page, an API call). Not playable.
+    return {
+      ok: false,
+      error:
+        'That is not a put.io download link. Open the file in put.io and copy its download URL.',
+    }
+  }
+  const alreadyConverted = Boolean(m[2])
+  if (alreadyConverted) {
+    return { ok: true, kind: 'putio', url: url.toString(), converted: true }
+  }
+  const rewritten = new URL(url.toString())
+  rewritten.pathname = rewritten.pathname.replace(
+    /\/files\/(\d+)\/download\b/,
+    '/files/$1/mp4/download',
+  )
+  return { ok: true, kind: 'putio', url: rewritten.toString(), converted: false }
+}
+
+/**
+ * True when a URL carries its own access credential in the query string.
+ *
+ * put.io download links embed an account-wide `oauth_token`, and the media URL
+ * is broadcast to everyone in the room. Worth saying out loud before someone
+ * pastes their account key into a chat with five people in it.
+ */
+export function hasEmbeddedCredential(rawUrl: string): boolean {
+  let url: URL
+  try {
+    url = new URL(rawUrl)
+  } catch {
+    return false
+  }
+  const risky = /^(oauth_token|access_token|api_key|apikey|token|auth|key)$/i
+  for (const name of url.searchParams.keys()) {
+    if (risky.test(name)) return true
+  }
+  return false
 }
 
 /**
@@ -139,7 +198,7 @@ export function buildMediaRef(
       setAt: opts.setAt,
     }
   }
-  let guessed = 'Direct link'
+  let guessed = parsed.kind === 'putio' ? 'put.io video' : 'Direct link'
   try {
     const name = new URL(parsed.url).pathname.split('/').pop()
     if (name) guessed = decodeURIComponent(name)
@@ -147,7 +206,7 @@ export function buildMediaRef(
     /* keep fallback */
   }
   return {
-    kind: 'direct',
+    kind: parsed.kind,
     fileId: null,
     url: parsed.url,
     title: opts.title?.trim() || guessed,
@@ -213,9 +272,13 @@ export function describeMediaError(
     case 3: // MEDIA_ERR_DECODE
       return 'The file downloaded but the browser could not decode it. Re-encode as MP4 (H.264 + AAC) for the widest support.'
     case 4: // MEDIA_ERR_SRC_NOT_SUPPORTED
-      return kind === 'drive'
-        ? `Could not play this file. Either it is not shared publicly, or it is not a format this browser can play (MP4 / H.264 works everywhere; MKV and AVI usually do not).${driveHint}`
-        : 'Could not play this URL. It may not be a direct media link, or the host blocks cross-origin playback.'
+      if (kind === 'drive') {
+        return `Could not play this file. Either it is not shared publicly, or it is not a format this browser can play (MP4 / H.264 works everywhere; MKV and AVI usually do not).${driveHint}`
+      }
+      if (kind === 'putio') {
+        return 'Could not play this file. put.io may not have finished converting it — open the file in put.io and check that an MP4 version is available.'
+      }
+      return 'Could not play this URL. It may not be a direct media link, or the host blocks cross-origin playback.'
     default:
       return `Could not load the video.${driveHint}`
   }

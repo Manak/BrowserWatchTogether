@@ -3,9 +3,10 @@ import {
   buildMediaRef,
   checkDriveIsPublic,
   drivePageUrl,
+  hasEmbeddedCredential,
   parseMediaLink,
   type MediaRef,
-} from '../lib/drive'
+} from '../lib/media'
 
 interface Props {
   name: string
@@ -69,7 +70,7 @@ export function MediaPicker({ name, current, onPick, onCancel }: Props) {
       }}
     >
       <label className="label" htmlFor="drive-link">
-        Google Drive link
+        Video link
       </label>
       <input
         id="drive-link"
@@ -79,7 +80,7 @@ export function MediaPicker({ name, current, onPick, onCancel }: Props) {
           setLink(e.target.value)
           setStatus({ kind: 'idle' })
         }}
-        placeholder="https://drive.google.com/file/d/…/view"
+        placeholder="Google Drive, put.io, or a direct video URL"
         inputMode="url"
         autoComplete="off"
         autoCapitalize="none"
@@ -127,6 +128,14 @@ export function MediaPicker({ name, current, onPick, onCancel }: Props) {
         </div>
       )}
 
+      {hasEmbeddedCredential(link) && (
+        <p className="warn" role="status">
+          This link contains an access token. Everyone in the room receives the
+          video link, so only use it with people you trust — and revoke the token
+          afterwards if the link ever leaves this room.
+        </p>
+      )}
+
       <div className="row">
         <button
           className="btn btn-primary"
@@ -143,7 +152,8 @@ export function MediaPicker({ name, current, onPick, onCancel }: Props) {
       </div>
 
       <p className="footnote">
-        The file must be shared as <strong>Anyone with the link</strong>. MP4 (H.264 +
+        Google Drive files must be shared as <strong>Anyone with the link</strong>.
+        put.io links are switched to the converted MP4 automatically. MP4 (H.264 +
         AAC) plays everywhere; MKV and AVI generally do not play in browsers.
       </p>
     </form>

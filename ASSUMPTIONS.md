@@ -100,15 +100,23 @@ settings.
 
 Tell me if you would rather it be a hard block with no override.
 
-### 7. Non-Drive direct links are also accepted ⚠️
+### 7. put.io and plain direct links are supported alongside Drive
 
-You asked for Drive specifically. I additionally accept any `https://…` URL that
-points at a media file. Two reasons: it is how I tested sync without a Drive
-file, and it is an escape hatch if Drive rate-limits you mid-film.
+Any `https://…` URL that points at a media file is accepted. Drive links get the
+full treatment (id parsing, sharing check, Drive-specific errors); direct links
+skip the sharing check because it does not apply.
 
-Drive links get the full treatment (id parsing, sharing check, Drive-specific
-errors); direct links skip the sharing check because it does not apply. If you
-want this removed it is one branch in `src/lib/drive.ts` and its tests.
+put.io is handled specifically, because its obvious link does not work:
+`/files/<id>/download/…` serves the original, usually MKV/HEVC, which serves as
+`video/x-matroska` and plays in no browser. `/files/<id>/mp4/download/…` serves
+put.io's H.264 + AAC conversion, which plays everywhere. A pasted raw link is
+rewritten to the converted one automatically, query string preserved.
+
+**One thing to watch:** put.io download URLs embed an account-wide
+`oauth_token`, and the media URL is broadcast to every peer in the room. The
+app shows a warning when a link carries a credential, but the safe habit is to
+treat a room containing such a link as if you had pasted the token into a group
+chat. Related code is in `src/lib/media.ts`.
 
 ---
 

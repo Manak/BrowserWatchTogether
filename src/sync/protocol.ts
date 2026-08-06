@@ -1,4 +1,4 @@
-import type { MediaRef } from '../lib/drive'
+import type { MediaRef } from '../lib/media'
 
 /**
  * Wire protocol for the room. Every message is a small JSON object broadcast

@@ -5,8 +5,9 @@ import {
   describeMediaError,
   driveDirectUrl,
   driveThumbnailUrl,
+  hasEmbeddedCredential,
   parseMediaLink,
-} from './drive'
+} from './media'
 
 const ID = '1A2b3C4d5E6f7G8h9I0jKlMnOpQrStUv'
 
@@ -58,6 +59,90 @@ describe('parseMediaLink', () => {
       kind: 'direct',
       url: 'https://example.com/media/movie.mp4',
     })
+  })
+})
+
+const PUTIO_MP4 =
+  'https://api.put.io/v2/files/1603908054/mp4/download/Show.S04E01.1080p.mkv?oauth_token=SECRET123'
+const PUTIO_RAW =
+  'https://api.put.io/v2/files/1603908054/download/Show.S04E01.1080p.mkv?oauth_token=SECRET123'
+
+describe('put.io links', () => {
+  it('keeps an already-converted mp4 link as-is', () => {
+    const r = parseMediaLink(PUTIO_MP4)
+    expect(r).toMatchObject({ ok: true, kind: 'putio', converted: true })
+    if (r.ok && r.kind === 'putio') expect(r.url).toBe(PUTIO_MP4)
+  })
+
+  it('rewrites a raw download link to the browser-playable mp4', () => {
+    const r = parseMediaLink(PUTIO_RAW)
+    expect(r).toMatchObject({ ok: true, kind: 'putio', converted: false })
+    if (r.ok && r.kind === 'putio') {
+      expect(r.url).toContain('/files/1603908054/mp4/download/')
+      // The token must survive the rewrite or the link stops working.
+      expect(r.url).toContain('oauth_token=SECRET123')
+    }
+  })
+
+  it('keeps the filename and query intact when rewriting', () => {
+    const r = parseMediaLink(PUTIO_RAW)
+    if (r.ok && r.kind === 'putio') {
+      expect(r.url).toContain('Show.S04E01.1080p.mkv')
+    }
+  })
+
+  it('handles put.io links without an api subdomain', () => {
+    const r = parseMediaLink('https://put.io/v2/files/42/download/a.mkv')
+    expect(r).toMatchObject({ ok: true, kind: 'putio', converted: false })
+  })
+
+  it('rejects a put.io URL that is not a download link', () => {
+    const r = parseMediaLink('https://app.put.io/files/1603908054')
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toMatch(/download link/i)
+  })
+
+  it('builds a put.io ref that plays the converted url', () => {
+    const parsed = parseMediaLink(PUTIO_RAW)
+    if (!parsed.ok) throw new Error('expected ok')
+    const ref = buildMediaRef(parsed, { setBy: 'Ada', setAt: 0 })
+    expect(ref.kind).toBe('putio')
+    expect(ref.url).toContain('/mp4/download/')
+    expect(ref.title).toBe('Show.S04E01.1080p.mkv')
+  })
+
+  it('explains a put.io failure in put.io terms', () => {
+    const msg = describeMediaError(4, 'putio')
+    expect(msg).toMatch(/put\.io/)
+    expect(msg).not.toMatch(/Anyone with the link/)
+  })
+})
+
+describe('hasEmbeddedCredential', () => {
+  it('flags put.io oauth tokens', () => {
+    expect(hasEmbeddedCredential(PUTIO_MP4)).toBe(true)
+  })
+
+  it.each(['access_token', 'api_key', 'token', 'auth', 'key'])(
+    'flags a %s parameter',
+    (param) => {
+      expect(hasEmbeddedCredential(`https://x.dev/a.mp4?${param}=abc`)).toBe(true)
+    },
+  )
+
+  it('does not flag ordinary links', () => {
+    expect(hasEmbeddedCredential('https://example.com/movie.mp4')).toBe(false)
+    expect(hasEmbeddedCredential(`https://drive.google.com/file/d/${ID}/view`)).toBe(
+      false,
+    )
+  })
+
+  it('does not flag opaque signature parameters that are not credentials', () => {
+    expect(hasEmbeddedCredential('https://cdn.example.com/a.mp4?u=abc123')).toBe(false)
+  })
+
+  it('is safe on junk input', () => {
+    expect(hasEmbeddedCredential('not a url')).toBe(false)
   })
 })
 

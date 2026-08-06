@@ -1,4 +1,4 @@
-import type { MediaRef } from '../lib/drive'
+import type { MediaRef } from '../lib/media'
 import { ClockSync } from './clockSync'
 import { bufferedAhead, computeCorrection } from './drift'
 import type { CtrlMsg, Msg, Playback, Tuning } from './protocol'

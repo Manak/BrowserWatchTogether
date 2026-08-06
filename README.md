@@ -2,11 +2,12 @@
 
 **Live: https://manak.github.io/BrowserWatchTogether/**
 
-Watch a public Google Drive video in sync with someone else, on a phone or a
-laptop. No server, no database, no accounts.
+Watch a video in sync with someone else, on a phone or a laptop. No server, no
+database, no accounts. Takes public Google Drive links, put.io links, or any
+direct video URL.
 
-Two people open the same room code, one pastes a Drive link, and both players
-stay locked to the same frame. Play, pause, and seek propagate to everyone; if
+Two people open the same room code, one pastes a link, and both players stay
+locked to the same frame. Play, pause, and seek propagate to everyone; if
 one person's connection stalls, the room waits for them and starts again
 together.
 
@@ -29,10 +30,15 @@ public Nostr relays to exchange WebRTC connection offers. Once the browsers are
 connected, every message travels directly between them. The relays only ever see
 encrypted signalling blobs — the room code is the encryption password.
 
-**Playing the video.** Each browser downloads the file straight from Google
-Drive's public download endpoint into a plain `<video>` element. No Drive API,
-no API key, no OAuth. That endpoint supports HTTP range requests, which is what
-makes seeking work.
+**Playing the video.** Each browser downloads the file straight into a plain
+`<video>` element — from Google Drive's public download endpoint, from put.io,
+or from any direct URL. No Drive API, no API key, no OAuth. These endpoints
+support HTTP range requests, which is what makes seeking work.
+
+put.io serves both the original file and an H.264 conversion at the same id.
+The original is usually MKV/HEVC, which no browser plays, so a pasted
+`/files/<id>/download/…` link is switched to `/files/<id>/mp4/download/…`
+automatically.
 
 **Staying in sync** is the interesting part — see
 [docs/SYNC.md](docs/SYNC.md) for the algorithm.
@@ -154,8 +160,9 @@ picked up automatically.
 1. **Enter your name.** Required before joining, so everyone knows who is who.
 2. **Start a room**, or join with a code like `sunny-otter-42`.
 3. **Share the code** — tap the room chip to copy the invite link.
-4. **Paste a Google Drive link.** In Drive: *Share → General access → Anyone
-   with the link*. If it is not shared, the app says so before loading.
+4. **Paste a video link.** Google Drive (*Share → General access → Anyone with
+   the link*; if it is not shared, the app says so before loading), a put.io
+   download link, or any direct video URL.
 5. **Watch.** Anyone can play, pause, or seek; everyone follows.
 
 ### Keyboard shortcuts (desktop)
@@ -179,6 +186,11 @@ everywhere. MKV, AVI, and HEVC generally do not.
 popular files ("Sorry, you can't view or download this file at this time").
 Nothing in this app can work around that; wait, or copy the file to another
 Drive account.
+
+**A put.io link will not play.** Check that put.io has finished making its MP4
+conversion — the original MKV/HEVC file cannot play in a browser. Note also that
+put.io download URLs embed an account-wide `oauth_token`, and the link is shared
+with everyone in the room; the app warns about this when it spots one.
 
 **Peers never connect.** Some strict NATs and corporate firewalls block direct
 WebRTC without a TURN relay, which this app deliberately does not include (it
