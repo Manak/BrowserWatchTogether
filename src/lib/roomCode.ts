@@ -30,7 +30,7 @@ function randomInt(maxExclusive: number): number {
     const buf = new Uint32Array(1)
     // Rejection sampling keeps the distribution flat.
     const limit = Math.floor(0xffffffff / maxExclusive) * maxExclusive
-    let v = 0
+    let v: number
     do {
       g.getRandomValues(buf)
       v = buf[0] ?? 0
