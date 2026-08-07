@@ -4,8 +4,11 @@
     {
       "name": "watch-together",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev", "--", "--port", "5180"],
-      "port": 5180
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
+      "autoPort": true
     }
   ]
 }
