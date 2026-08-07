@@ -196,6 +196,36 @@ button stays reachable by the person whose ad it is. Since the catcher covers
 YouTube's own "Watch on YouTube" affordance, an *Open on YouTube* link sits under
 the title instead.
 
+### 7f. On an iPhone the embed keeps its own controls, because fullscreen needs them
+
+iPhone Safari has no Fullscreen API for anything but a `<video>` —
+`requestFullscreen` and `webkitRequestFullscreen` are both undefined on the
+document element, verified on the device. A Drive file copes: there is a real
+`<video>` to hand to `webkitEnterFullscreen`. A YouTube embed has none — its
+`<video>` is inside a cross-origin iframe — so our fullscreen button had nothing
+to call and did nothing at all.
+
+YouTube's own fullscreen button does work there, and it exists only as part of
+its control bar, so on a browser that cannot fullscreen an element the bar is
+turned back on and our button is hidden. Which browser that is comes from a
+feature test rather than a user-agent list, so a Safari that gains the API
+starts using our button again on its own.
+
+The cost is that YouTube's controls are then reachable, and a scrub or a pause
+there would otherwise move one person. So the room adopts them, the same bargain
+it already strikes with Apple's native player for a Drive file. Play and pause
+come from the state change; a seek has no event at all, so it is inferred from a
+playhead move that playback cannot account for — ignoring ads, which rewrite the
+playhead by themselves, and our own seeks.
+
+Adoption deliberately does not start until the player has played something. A
+freshly loaded player sits in CUED, which reads as paused, and a peer joining a
+room already in progress would otherwise announce that as a pause and stop the
+film for everybody.
+
+Everywhere else this changes nothing: controls stay off, the click catcher stays,
+and our own fullscreen button is the one that works.
+
 ### 7e. Drift is corrected by seeking, not by trimming the rate
 
 A YouTube embed accepts eight fixed playback speeds and rounds anything else back
@@ -471,9 +501,11 @@ add — the transport carries arbitrary messages already.
   live player — the cued-duration anchor, the playback-rate rounding, the state
   sequence at startup — but the ad path itself has only been exercised against
   modelled sequences. See 7b.
-- **YouTube fullscreen on an iPhone.** iOS gives the Fullscreen API to `<video>`
-  elements only, and there is no `<video>` here to hand it. Fullscreen works for
-  YouTube on a desktop and on Android; on an iPhone the button will do nothing.
+- **The YouTube fullscreen transition on an iPhone.** The embed keeps its own
+  controls there and its fullscreen button is the one that works (see 7f). I
+  confirmed on an iPhone that the feature test reads false and that the button
+  is drawn, but not that tapping it fills the screen: YouTube will not play in
+  the simulator, which has no decoder for it.
 
 What *was* verified end-to-end with two real browsers on a real WebRTC
 connection: a YouTube video cueing on both peers with the same duration, play,

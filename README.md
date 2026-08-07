@@ -263,6 +263,12 @@ belongs to whoever is watching it — nothing is covering it. Past ninety second
 the room gives up waiting and carries on regardless, and "Wait for everyone" in
 the panel turns the waiting off entirely.
 
+**Fullscreen on an iPhone, watching YouTube.** Use the fullscreen button inside
+the YouTube player rather than looking for ours — iPhone Safari will only put a
+`<video>` into fullscreen, and YouTube's is sealed inside its iframe, so on that
+one combination the embed keeps its own controls and ours is hidden. Play, pause
+and seek from those controls still move the whole room.
+
 **The YouTube video jumps a little instead of easing back into sync.** It has
 to. A `<video>` can be nudged a few percent faster or slower without anyone
 hearing it, but a YouTube embed only accepts its own fixed speeds, so the only
