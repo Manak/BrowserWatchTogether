@@ -12,13 +12,23 @@
  * seeking work in a plain <video> element.
  */
 
-export type MediaKind = 'drive' | 'putio' | 'direct'
+import {
+  isBareVideoId,
+  isYouTubeHost,
+  parseYouTubeUrl,
+  youtubeWatchUrl,
+} from './youtube'
+
+export type MediaKind = 'drive' | 'putio' | 'direct' | 'youtube'
 
 export interface MediaRef {
   kind: MediaKind
   /** Drive file id, or null for a plain direct URL. */
   fileId: string | null
-  /** URL actually handed to <video src>. */
+  /**
+   * URL actually handed to <video src>. For YouTube this is the watch page —
+   * nothing loads it as media, it is what the "open on YouTube" link points at.
+   */
   url: string
   /** Human label shown in the UI. */
   title: string
@@ -26,12 +36,17 @@ export interface MediaRef {
   setBy: string
   /** Wall clock of the setter, for display only. */
   setAt: number
+  /** YouTube video id. Absent for every other kind. */
+  videoId?: string
+  /** Where to start, from a `?t=` in the pasted link. */
+  startAt?: number
 }
 
 export type ParseResult =
   | { ok: true; kind: 'drive'; fileId: string }
   | { ok: true; kind: 'putio'; url: string; converted: boolean }
   | { ok: true; kind: 'direct'; url: string }
+  | { ok: true; kind: 'youtube'; videoId: string; startAt: number }
   | { ok: false; error: string }
 
 /** Drive file ids are base64url-ish and comfortably longer than 20 chars. */
@@ -57,11 +72,15 @@ const ID_PATTERNS: RegExp[] = [
  */
 export function parseMediaLink(raw: string): ParseResult {
   const input = raw.trim()
-  if (!input) return { ok: false, error: 'Paste a Google Drive link first.' }
+  if (!input) return { ok: false, error: 'Paste a video link first.' }
 
-  // Bare file id.
-  if (FILE_ID.test(input) && !input.includes('/') && !input.includes('.')) {
-    return { ok: true, kind: 'drive', fileId: input }
+  // A bare id. YouTube's is 11 characters and Drive's is comfortably longer, so
+  // the two never collide.
+  if (!input.includes('/') && !input.includes('.')) {
+    if (isBareVideoId(input)) {
+      return { ok: true, kind: 'youtube', videoId: input, startAt: 0 }
+    }
+    if (FILE_ID.test(input)) return { ok: true, kind: 'drive', fileId: input }
   }
 
   let url: URL
@@ -99,6 +118,12 @@ export function parseMediaLink(raw: string): ParseResult {
       ok: false,
       error: "Couldn't find a file id in that Google Drive link.",
     }
+  }
+
+  if (isYouTubeHost(host)) {
+    const yt = parseYouTubeUrl(url)
+    if (!yt.ok) return yt
+    return { ok: true, kind: 'youtube', videoId: yt.videoId, startAt: yt.startAt }
   }
 
   if (host === 'put.io' || host === 'api.put.io' || host.endsWith('.put.io')) {
@@ -188,6 +213,21 @@ export function buildMediaRef(
   parsed: Extract<ParseResult, { ok: true }>,
   opts: { title?: string; setBy: string; setAt: number },
 ): MediaRef {
+  if (parsed.kind === 'youtube') {
+    return {
+      kind: 'youtube',
+      fileId: null,
+      videoId: parsed.videoId,
+      startAt: parsed.startAt,
+      url: youtubeWatchUrl(parsed.videoId, parsed.startAt),
+      // The real title is fetched separately and is allowed to fail, so there
+      // is always a usable fallback here.
+      title: opts.title?.trim() || 'YouTube video',
+      setBy: opts.setBy,
+      setAt: opts.setAt,
+    }
+  }
+
   if (parsed.kind === 'drive') {
     return {
       kind: 'drive',
@@ -264,6 +304,9 @@ export function describeMediaError(
     kind === 'drive'
       ? " In Drive, open the file → Share → General access → \"Anyone with the link\"."
       : ''
+  // YouTube never reaches a <video> element, so a MediaError code here would be
+  // meaningless; describeYouTubeError handles the player's own codes instead.
+  if (kind === 'youtube') return 'YouTube could not play this video.'
   switch (code) {
     case 1: // MEDIA_ERR_ABORTED
       return 'Loading was cancelled. Try again.'

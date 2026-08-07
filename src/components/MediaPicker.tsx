@@ -7,6 +7,7 @@ import {
   parseMediaLink,
   type MediaRef,
 } from '../lib/media'
+import { fetchYouTubeTitle } from '../lib/youtube'
 
 interface Props {
   name: string
@@ -25,9 +26,15 @@ export function MediaPicker({ name, current, onPick, onCancel }: Props) {
   const [title, setTitle] = useState('')
   const [status, setStatus] = useState<Status>({ kind: 'idle' })
 
-  const commit = (parsed: ReturnType<typeof parseMediaLink>) => {
+  const commit = (parsed: ReturnType<typeof parseMediaLink>, resolvedTitle?: string) => {
     if (!parsed.ok) return
-    onPick(buildMediaRef(parsed, { title, setBy: name, setAt: Date.now() }))
+    onPick(
+      buildMediaRef(parsed, {
+        title: title || resolvedTitle,
+        setBy: name,
+        setAt: Date.now(),
+      }),
+    )
     setLink('')
     setTitle('')
     setStatus({ kind: 'idle' })
@@ -37,6 +44,14 @@ export function MediaPicker({ name, current, onPick, onCancel }: Props) {
     const parsed = parseMediaLink(link)
     if (!parsed.ok) {
       setStatus({ kind: 'error', message: parsed.error })
+      return
+    }
+    if (parsed.kind === 'youtube') {
+      // The real title comes from YouTube's public oEmbed endpoint. It is a
+      // nicety, so it gets one short attempt and never blocks the video.
+      setStatus({ kind: 'checking' })
+      const fetched = title ? null : await fetchYouTubeTitle(parsed.videoId)
+      commit(parsed, fetched ?? undefined)
       return
     }
     if (parsed.kind !== 'drive') {
@@ -80,7 +95,7 @@ export function MediaPicker({ name, current, onPick, onCancel }: Props) {
           setLink(e.target.value)
           setStatus({ kind: 'idle' })
         }}
-        placeholder="Google Drive, put.io, or a direct video URL"
+        placeholder="YouTube, Google Drive, put.io, or a direct video URL"
         inputMode="url"
         autoComplete="off"
         autoCapitalize="none"
@@ -152,9 +167,11 @@ export function MediaPicker({ name, current, onPick, onCancel }: Props) {
       </div>
 
       <p className="footnote">
-        Google Drive files must be shared as <strong>Anyone with the link</strong>.
-        put.io links are switched to the converted MP4 automatically. MP4 (H.264 +
-        AAC) plays everywhere; MKV and AVI generally do not play in browsers.
+        YouTube plays in its own embed, so everyone sees their own ads — the room
+        pauses for whoever is watching one and starts again together. Google Drive
+        files must be shared as <strong>Anyone with the link</strong>. put.io links
+        are switched to the converted MP4 automatically. MP4 (H.264 + AAC) plays
+        everywhere; MKV and AVI generally do not play in browsers.
       </p>
     </form>
   )

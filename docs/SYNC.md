@@ -96,6 +96,31 @@ marginal connection.
 A peer that goes silent is excluded from the gate after 30 seconds, so one
 broken client cannot freeze the room forever.
 
+The instant the room un-gates, the leader sends a heartbeat rather than waiting
+for the next scheduled one. Without that, the leader plays while everyone else
+is still following an anchor that says `advancing: false` — so they hold
+position and, being behind a target that is not moving, get seeked *backwards*
+until the next heartbeat sorts them out. A resume is exactly when the published
+anchor stops being true, so that is when it gets republished.
+
+## Ads
+
+An ad is a fourth problem, and it only exists for YouTube: ads are served to
+each viewer separately, so one person's playhead stops for thirty seconds while
+everyone else's does not.
+
+It is handled as a variety of "not ready" — the same gate that waits for a
+buffering peer — with two differences. It is reported separately on the wire
+(`ad` on the ready message) so the UI can say *"Sam has an ad"* rather than
+*Buffering*, which otherwise sends people off to check a working connection.
+And it is capped: unlike a stall, an ad is inferred rather than observed
+(`youtube/adWatcher.ts`), so the room stops waiting after 90 seconds rather
+than trusting an inference indefinitely.
+
+A player showing an ad also reports a readyState below `HAVE_CURRENT_DATA`,
+which excludes it from leadership — its playhead is frozen and its duration
+belongs to the advert, so it cannot be the room's timing authority.
+
 ## Why this is testable
 
 The engine talks to two interfaces, never to the browser:
@@ -104,6 +129,10 @@ The engine talks to two interfaces, never to the browser:
   controllable latency, jitter, and per-peer clock skew.
 - `MediaElementLike` — the video element. Tests supply a simulation that models
   imperfect decode rate, a finite buffer that can run dry, and refused autoplay.
+  The YouTube embed is another implementation of the same interface, so it is
+  driven by the identical code path — and a simulated one models the things
+  that make it different: ads taking the player over, and a playback rate that
+  refuses to be trimmed.
 
 Both run under a fake clock. A five-minute watch party with three peers, two
 decode rates and a stall executes in milliseconds and gives the same answer

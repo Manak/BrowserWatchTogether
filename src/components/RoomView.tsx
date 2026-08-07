@@ -208,6 +208,21 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
                 {snap.driftSec !== 0 && Number.isFinite(snap.driftSec) && (
                   <> · {formatDrift(snap.driftSec)}</>
                 )}
+                {snap.media.kind === 'youtube' && (
+                  // The embed's own "Watch on YouTube" affordance sits under
+                  // the click catcher, so put one back where it still works.
+                  <>
+                    {' · '}
+                    <a
+                      className="link"
+                      href={snap.media.url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                    >
+                      Open on YouTube
+                    </a>
+                  </>
+                )}
               </div>
             </div>
           )}
@@ -322,6 +337,16 @@ function StatusChip({
       </span>
     )
   }
+  if (snap.selfInAd) return <span className="chip chip-warn">Your ad is playing</span>
+  if (snap.gated && snap.waitingForAd.length > 0) {
+    // Naming the ad matters: "buffering" reads as a broken connection, and the
+    // person waiting starts fiddling with something that is not wrong.
+    return (
+      <span className="chip chip-warn">
+        {snap.waitingForAd.join(', ')} · ad
+      </span>
+    )
+  }
   if (snap.gated && snap.waitingFor.length > 0) {
     return <span className="chip chip-warn">Waiting for {snap.waitingFor.join(', ')}</span>
   }
@@ -382,21 +407,46 @@ function Overlay({
     )
   }
 
+  // Our own ad is the one case where nothing must cover the picture: the Skip
+  // button is in there, and it belongs to the person watching. A corner note
+  // explains why everyone else has stopped.
+  if (snap.selfInAd) {
+    return (
+      <div className="ad-note" role="status">
+        <span className="ad-dot" aria-hidden="true" />
+        Ad playing{snap.peerCount > 1 ? ' — the room is waiting for you' : ''}
+        {snap.selfAdMs > 1500 && <> · {Math.round(snap.selfAdMs / 1000)}s</>}
+      </div>
+    )
+  }
+
   if (snap.gated) {
+    const ads = snap.waitingForAd
     return (
       <div className="overlay overlay-soft">
         <div className="overlay-inner">
           <span className="spinner" aria-hidden="true" />
           <p className="overlay-title">
-            {snap.waitingFor.length
-              ? `Waiting for ${snap.waitingFor.join(', ')}`
-              : 'Buffering'}
+            {ads.length
+              ? `${joinNames(ads)} ${ads.length === 1 ? 'has' : 'have'} an ad`
+              : snap.waitingFor.length
+                ? `Waiting for ${joinNames(snap.waitingFor)}`
+                : 'Buffering'}
           </p>
-          <p className="overlay-sub">Everyone starts again together.</p>
+          <p className="overlay-sub">
+            {ads.length
+              ? 'YouTube shows ads to each person separately. The film waits.'
+              : 'Everyone starts again together.'}
+          </p>
         </div>
       </div>
     )
   }
 
   return null
+}
+
+function joinNames(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? ''
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`
 }

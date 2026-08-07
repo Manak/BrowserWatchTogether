@@ -30,9 +30,13 @@ class Sim {
   readonly net = new MemoryNetwork()
   readonly nodes: Node[] = []
 
-  add(id: string, name: string, opts: { clockSkewMs?: number } = {}): Node {
+  add(
+    id: string,
+    name: string,
+    opts: { clockSkewMs?: number; video?: FakeVideo } = {},
+  ): Node {
     const transport = this.net.connect(id, opts)
-    const video = new FakeVideo()
+    const video = opts.video ?? new FakeVideo()
     const engine = new SyncEngine({
       transport,
       name,
@@ -821,5 +825,238 @@ describe('snapshot', () => {
     sim.run(500)
     const names = b.engine.getSnapshot().peers.map((p) => p.name).sort()
     expect(names).toEqual(['Ada L.', 'Bo'])
+  })
+})
+
+/**
+ * An element that behaves the way a YouTube embed does: ads can take it over,
+ * and it will not accept a playback rate outside YouTube's own eight speeds.
+ *
+ * Modelled here rather than driving the real adapter, because what is under
+ * test is the *room's* response — the engine has no idea which kind of player
+ * it is holding, and that is the point.
+ */
+class AdVideo extends FakeVideo {
+  inAd = false
+  adElapsedMs = 0
+  readonly canTrimRate = false
+
+  private static readonly SPEEDS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]
+
+  /** Counts corrections the engine applied by writing to currentTime. */
+  seeks = 0
+
+  constructor() {
+    super()
+    // Defined on the instance, not the prototype: FakeVideo declares these as
+    // fields, and a base-class field is an own property that would shadow any
+    // accessor a subclass put on the prototype.
+    let time = 0
+    Object.defineProperty(this, 'currentTime', {
+      get: () => time,
+      set: (v: number) => {
+        if (v !== time) this.seeks++
+        time = v
+      },
+    })
+    let rate = 1
+    Object.defineProperty(this, 'playbackRate', {
+      get: () => rate,
+      // YouTube rounds anything but its own speeds back towards 1, which is
+      // what makes the engine's inaudible trim a no-op on this player.
+      set: (v: number) => {
+        rate = AdVideo.SPEEDS.includes(v) ? v : 1
+      },
+    })
+  }
+
+  /** An ad reports no usable film data, exactly as the adapter presents one. */
+  override get readyState(): number {
+    return this.inAd ? 1 : super.readyState
+  }
+
+  /** The film does not advance behind an ad. */
+  override advance(ms: number): void {
+    if (this.inAd) {
+      this.adElapsedMs += ms
+      return
+    }
+    super.advance(ms)
+  }
+
+  startAd(): void {
+    this.inAd = true
+    this.adElapsedMs = 0
+  }
+
+  endAd(): void {
+    this.inAd = false
+    this.adElapsedMs = 0
+  }
+}
+
+describe('ads', () => {
+  /**
+   * The behaviour the whole feature exists for. Ads are served per viewer, so
+   * without this one person watches thirty seconds of advertising while the
+   * other watches thirty seconds of film, and they are never together again.
+   */
+  it('holds the film for whoever is watching an ad, and says so', () => {
+    const a = sim.add('a', 'Ada')
+    const b = sim.add('b', 'Bo', { video: new AdVideo() })
+    a.engine.setMedia(MEDIA)
+    a.engine.play()
+    sim.run(5000)
+    expect(a.video.paused).toBe(false)
+
+    ;(b.video as AdVideo).startAd()
+    sim.run(2000)
+
+    const snap = a.engine.getSnapshot()
+    expect(a.video.paused).toBe(true)
+    expect(snap.gated).toBe(true)
+    // Named as an ad, not as buffering: "buffering" sends people to check a
+    // connection that is working perfectly.
+    expect(snap.waitingForAd).toEqual(['Bo'])
+    expect(snap.peers.find((p) => p.name === 'Bo')?.inAd).toBe(true)
+    // Still an intention to play. The room is holding, not stopping.
+    expect(snap.intentPlaying).toBe(true)
+  })
+
+  it('starts everyone again together when the ad finishes', () => {
+    const a = sim.add('a', 'Ada')
+    const b = sim.add('b', 'Bo', { video: new AdVideo() })
+    a.engine.setMedia(MEDIA)
+    a.engine.play()
+    sim.run(5000)
+    const heldAt = a.video.currentTime
+
+    ;(b.video as AdVideo).startAd()
+    sim.run(15_000)
+    // Ada has not moved on without Bo.
+    expect(a.video.currentTime).toBeLessThan(heldAt + 1)
+
+    ;(b.video as AdVideo).endAd()
+    sim.run(3000)
+
+    expect(a.engine.getSnapshot().gated).toBe(false)
+    expect(a.video.paused).toBe(false)
+    expect(b.video.paused).toBe(false)
+    expect(sim.spread()).toBeLessThan(1)
+  })
+
+  it('knows the difference between an ad and a stall', () => {
+    const a = sim.add('a', 'Ada')
+    const b = sim.add('b', 'Bo', { video: new AdVideo() })
+    a.engine.setMedia(MEDIA)
+    a.engine.play()
+    sim.run(3000)
+
+    b.video.starve(0)
+    sim.run(2000)
+    const snap = a.engine.getSnapshot()
+    expect(snap.waitingFor).toEqual(['Bo'])
+    expect(snap.waitingForAd).toEqual([])
+  })
+
+  /**
+   * A peer showing an ad has a playhead that is frozen and a duration that
+   * belongs to the advert. Letting it lead would heartbeat that to the room.
+   */
+  it('never lets the person watching an ad keep the room’s time', () => {
+    // 'a' sorts first, so it would lead if it were eligible.
+    const a = sim.add('a', 'Ada', { video: new AdVideo() })
+    const b = sim.add('b', 'Bo')
+    a.engine.setMedia(MEDIA)
+    a.engine.play()
+    sim.run(3000)
+    expect(a.engine.getSnapshot().leaderId).toBe('a')
+
+    ;(a.video as AdVideo).startAd()
+    sim.run(2000)
+
+    expect(a.engine.getSnapshot().leaderId).toBe('b')
+    expect(b.engine.getSnapshot().leaderId).toBe('b')
+  })
+
+  /**
+   * The escape hatch. Ads end; an ad *state* that does not — a mis-read
+   * duration, a player wedged behind a blocker — would otherwise stop the film
+   * for everybody with no way back except the toggle in the panel.
+   */
+  it('stops waiting for an ad that never ends', () => {
+    const a = sim.add('a', 'Ada')
+    const b = sim.add('b', 'Bo', { video: new AdVideo() })
+    a.engine.setMedia(MEDIA)
+    a.engine.play()
+    sim.run(3000)
+
+    ;(b.video as AdVideo).startAd()
+    sim.run(5000)
+    expect(a.engine.getSnapshot().gated).toBe(true)
+
+    sim.run(TUNING.maxAdWaitMs + 2000)
+
+    expect(a.engine.getSnapshot().gated).toBe(false)
+    expect(a.video.paused).toBe(false)
+  })
+
+  it('catches the ad-watcher up when their film comes back', () => {
+    const a = sim.add('a', 'Ada')
+    const b = sim.add('b', 'Bo', { video: new AdVideo() })
+    a.engine.setMedia(MEDIA)
+    a.engine.setWaitForEveryone(false)
+    a.engine.play()
+    sim.run(3000)
+
+    ;(b.video as AdVideo).startAd()
+    sim.run(20_000)
+    expect(a.video.currentTime - b.video.currentTime).toBeGreaterThan(15)
+
+    ;(b.video as AdVideo).endAd()
+    sim.run(4000)
+    expect(Math.abs(a.video.currentTime - b.video.currentTime)).toBeLessThan(1)
+  })
+
+  it('passes the film’s duration to a player that cannot tell yet', () => {
+    const a = sim.add('a', 'Ada')
+    const seen: number[] = []
+    const b = sim.add('b', 'Bo', { video: new AdVideo() })
+    ;(b.video as unknown as { noteRoomDuration: (d: number) => void }).noteRoomDuration =
+      (d) => seen.push(d)
+    b.engine.attachMedia(b.video)
+
+    a.engine.setMedia(MEDIA)
+    a.engine.play()
+    sim.run(3000)
+
+    // Ada's element knows how long the film is; Bo's, stuck behind a pre-roll,
+    // has only the advert's duration to go on until somebody tells it.
+    expect(seen).toContain(a.video.duration)
+  })
+})
+
+describe('players that cannot trim their playback rate', () => {
+  /**
+   * A <video> converges by running a few percent fast or slow, which nobody
+   * can hear. A YouTube embed only accepts its own eight fixed speeds and
+   * rounds everything else back to 1 — so for such a player the trim band is
+   * dead air in which drift simply accumulates. It has to seek instead, and
+   * sooner, while the jump is still small.
+   */
+  it('seeks a drifting player back before the drift becomes visible', () => {
+    const a = sim.add('a', 'Ada')
+    const slow = new AdVideo()
+    // Decodes 3% fast: a real, ordinary hardware difference.
+    slow.decodeSkew = 1.03
+    const b = sim.add('b', 'Bo', { video: slow })
+    a.engine.setMedia(MEDIA)
+    a.engine.play()
+    sim.run(60_000)
+
+    expect(Math.abs(a.video.currentTime - b.video.currentTime)).toBeLessThan(1)
+    // It got there by seeking, since the rate nudge is a no-op on this player.
+    expect(slow.playbackRate).toBe(1)
+    expect(slow.seeks).toBeGreaterThan(0)
   })
 })

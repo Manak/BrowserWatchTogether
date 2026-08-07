@@ -26,6 +26,22 @@ export interface MediaElementLike {
   }
   play(): Promise<void>
   pause(): void
+
+  // Optional capabilities. A plain <video> implements none of them, so
+  // everything below has to be safe to be absent.
+
+  /**
+   * False when playbackRate cannot be trimmed by small amounts. YouTube rounds
+   * anything that is not one of its eight fixed speeds towards 1, so the usual
+   * inaudible nudge does nothing at all and drift has to be seeked away.
+   */
+  readonly canTrimRate?: boolean
+  /** True while the player is showing an ad rather than the film. */
+  readonly inAd?: boolean
+  /** How long the current ad break has been running. */
+  readonly adElapsedMs?: number
+  /** Tell the element the film's duration, learned from a peer past their ads. */
+  noteRoomDuration?(seconds: number): void
 }
 
 export interface PeerView {
@@ -42,6 +58,8 @@ export interface PeerView {
   rttMs: number | null
   /** Connected but silent for a while — excluded from the wait-for-everyone gate. */
   stale: boolean
+  /** Watching an ad. Not behind, not broken — just waiting it out. */
+  inAd: boolean
 }
 
 export interface Snapshot {
@@ -58,6 +76,12 @@ export interface Snapshot {
   gated: boolean
   /** Display names we are waiting on. */
   waitingFor: string[]
+  /** Of those, the ones sitting through an ad. */
+  waitingForAd: string[]
+  /** An ad is playing on our own screen. */
+  selfInAd: boolean
+  /** How long our own ad has been running, for a countdown. */
+  selfAdMs: number
   waitForEveryone: boolean
   leaderId: string
   isLeader: boolean
@@ -81,6 +105,9 @@ interface PeerRecord {
   ended: boolean
   loaded: boolean
   lastSeen: number
+  inAd: boolean
+  /** When their current ad break started, in our clock. Capped, see isGated. */
+  adSince: number
 }
 
 /** Somebody arriving or leaving, for chimes and on-screen notices. */
@@ -247,7 +274,7 @@ export class SyncEngine {
     if (this.wasLeader && !leading) this.onLostLeadership()
     this.wasLeader = leading
 
-    if (leading && now - this.lastTickSent >= this.tuning.tickMs) {
+    if (leading && (now - this.lastTickSent >= this.tuning.tickMs || this.anchorStale())) {
       this.lastTickSent = now
       this.sendTick(now)
     }
@@ -295,7 +322,9 @@ export class SyncEngine {
 
   setMedia(ref: MediaRef): void {
     this.media = ref
-    this.issue({ playing: false, time: 0 }, { media: ref })
+    // A link copied with "Start at 12:30" means it for the whole room, not just
+    // for whoever pasted it.
+    this.issue({ playing: false, time: ref.startAt ?? 0 }, { media: ref })
   }
 
   setWaitForEveryone(value: boolean): void {
@@ -383,6 +412,7 @@ export class SyncEngine {
       time: this.currentTime(),
       rttMs: null,
       stale: false,
+      inAd: this.selfInAd(),
     }
 
     const others = [...this.peers.values()]
@@ -396,10 +426,13 @@ export class SyncEngine {
         time: p.time,
         rttMs: this.clock.rttTo(p.id),
         stale: now - p.lastSeen > this.tuning.peerTimeoutMs,
+        inAd: p.inAd,
       }))
       .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
 
-    const waitingFor = this.notReadyPeers(now).map((p) => p.name)
+    const holding = this.notReadyPeers(now)
+    const waitingFor = holding.map((p) => p.name)
+    const waitingForAd = holding.filter((p) => p.inAd).map((p) => p.name)
     const target = this.targetTime()
 
     return {
@@ -411,6 +444,9 @@ export class SyncEngine {
       effectivePlaying: !!this.el && !this.el.paused,
       gated: this.isGated(now),
       waitingFor,
+      waitingForAd,
+      selfInAd: this.selfInAd(),
+      selfAdMs: this.el?.adElapsedMs ?? 0,
       waitForEveryone: this.waitForEveryone,
       leaderId,
       isLeader: leaderId === selfId,
@@ -501,6 +537,8 @@ export class SyncEngine {
         ended: false,
         loaded: false,
         lastSeen: this.now(),
+        inAd: false,
+        adSince: 0,
       }
       this.peers.set(id, rec)
     }
@@ -586,6 +624,17 @@ export class SyncEngine {
         rec.time = msg.time
         rec.ended = msg.ended
         rec.loaded = msg.loaded
+        const inAd = msg.ad === true
+        // Stamped in our own clock: an ad's length is a local stopwatch, and
+        // borrowing a peer's timestamp would drag their clock error into it.
+        if (inAd && !rec.inAd) rec.adSince = this.now()
+        if (!inAd) rec.adSince = 0
+        rec.inAd = inAd
+        // The film is the same length for everyone, so the first peer past
+        // their ads tells the rest what to measure their own player against.
+        if (msg.contentDuration && msg.contentDuration > 0 && !inAd) {
+          this.el?.noteRoomDuration?.(msg.contentDuration)
+        }
         break
       }
 
@@ -649,6 +698,24 @@ export class SyncEngine {
     }
   }
 
+  /**
+   * True when our own element has started or stopped since the anchor we last
+   * published — which is to say, when the room is being told something that is
+   * no longer true.
+   *
+   * Without this the heartbeat period becomes a stutter. The moment the room
+   * un-gates, the leader plays while everyone else is still following an anchor
+   * that says "not advancing", so they hold position — and, being up to two
+   * seconds behind a target that is not moving, get seeked *backwards* before
+   * the next heartbeat arrives to sort them out. Announcing the change as it
+   * happens keeps "everyone starts again together" true rather than nearly.
+   */
+  private anchorStale(): boolean {
+    const el = this.el
+    if (!el) return false
+    return (!el.paused && !el.ended) !== this.anchor.advancing
+  }
+
   private sendTick(now: number): void {
     const el = this.el
     this.anchor = {
@@ -680,7 +747,13 @@ export class SyncEngine {
       time: this.currentTime(),
       ended: !!this.el?.ended,
       loaded: this.selfCanLead(),
+      ad: this.selfInAd(),
+      contentDuration: this.el && Number.isFinite(this.el.duration) ? this.el.duration : 0,
     })
+  }
+
+  private selfInAd(): boolean {
+    return this.el?.inAd === true
   }
 
   /**
@@ -813,10 +886,23 @@ export class SyncEngine {
     return this.selfBuffered() >= need
   }
 
+  /**
+   * Everyone the room is currently holding for.
+   *
+   * Ads get a ceiling. Waiting through somebody's pre-roll is the right thing
+   * to do and takes fifteen seconds, but an ad state that never clears — a
+   * mis-read duration, a player wedged behind a blocker — would otherwise stop
+   * the film for everybody with no way back except the toggle in the panel.
+   * Past the ceiling we stop waiting for that person; they catch up by seeking
+   * when their film returns, which is the ordinary late-joiner path.
+   */
   private notReadyPeers(now: number): PeerRecord[] {
-    return [...this.peers.values()].filter(
-      (p) => !p.ready && now - p.lastSeen <= this.tuning.peerTimeoutMs,
-    )
+    return [...this.peers.values()].filter((p) => {
+      if (p.ready) return false
+      if (now - p.lastSeen > this.tuning.peerTimeoutMs) return false
+      if (p.inAd && now - p.adSince > this.tuning.maxAdWaitMs) return false
+      return true
+    })
   }
 
   /** True when we are deliberately holding playback for someone. */
@@ -891,8 +977,11 @@ export class SyncEngine {
       el.playbackRate = 1
       return
     }
-    // Do not fight the network while we are the one buffering.
+    // Do not fight the network while we are the one buffering, and never
+    // correct against an ad: the playhead is not moving and the seek would
+    // land inside the advert.
     if (el.readyState < HAVE_CURRENT_DATA) return
+    if (el.inAd) return
 
     const correction = computeCorrection(
       {
@@ -902,7 +991,7 @@ export class SyncEngine {
         sinceSeekMs: now - this.lastSeekAt,
         duration: el.duration,
       },
-      this.tuning,
+      this.correctionTuning(el),
     )
 
     if (correction.kind === 'seek' && correction.seekTo !== undefined) {
@@ -914,6 +1003,30 @@ export class SyncEngine {
       el.playbackRate = correction.rate
     }
   }
+
+  /**
+   * A `<video>` converges by trimming its playback rate a few percent, which
+   * nobody can hear. A YouTube embed cannot: it only accepts its own eight
+   * fixed speeds and rounds everything else back to 1, so the trim band is
+   * dead air in which drift simply accumulates until it crosses the hard-seek
+   * threshold two seconds later.
+   *
+   * So for a player like that, close the band: correct by seeking, and do it
+   * while the jump is still small enough to read as a stutter rather than as
+   * the film losing its place.
+   */
+  private correctionTuning(el: MediaElementLike): Tuning {
+    if (el.canTrimRate !== false) return this.tuning
+    if (!this.seekOnlyTuning) {
+      this.seekOnlyTuning = {
+        ...this.tuning,
+        hardSeekSec: this.tuning.seekOnlyDriftSec,
+      }
+    }
+    return this.seekOnlyTuning
+  }
+
+  private seekOnlyTuning: Tuning | null = null
 
   private reapStalePeers(now: number): void {
     // We never drop peers the transport still considers connected — a silent

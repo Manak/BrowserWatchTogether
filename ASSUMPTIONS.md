@@ -120,6 +120,96 @@ chat. Related code is in `src/lib/media.ts`.
 
 ---
 
+## YouTube
+
+### 7a. YouTube plays in YouTube's embed, and there was no choice about it
+
+A YouTube video cannot go into a `<video>` element — the bytes are not fetchable
+and the terms of service are unambiguous. The only sanctioned way to play one on
+another page is the iframe embed driven by the IFrame Player API, so that is what
+this uses. It is the app's only third-party script, loaded lazily: a room
+watching a Drive file never touches youtube.com.
+
+The embed is wrapped in an adapter (`src/youtube/adapter.ts`) that presents the
+same shape as a `<video>`, so the sync engine drives both through one interface
+and none of the sync logic has a YouTube branch in it.
+
+The embed uses `youtube-nocookie.com`, which is the same player without the
+tracking cookies until something is actually played.
+
+### 7b. Ad detection is inference, and it is the part most likely to need tuning ⚠️
+
+**This is the assumption I would look at first.** The IFrame API has no ad event
+and exposes no ad state. During an ad, `getCurrentTime()` and `getDuration()`
+describe the ad rather than the film — which is not a cosmetic problem, because
+a peer reporting the ad's playhead as the film's would drag everyone back to the
+start.
+
+So it is worked out from the numbers, and the anchor is this: while a video is
+*cued* — loaded but not started — the player reports the film's real duration and
+no ad can be in front of it yet. I verified that against the live API before
+building on it (a cued player reported 635s and 282s for two different videos,
+before any playback). Anything that later disagrees with that anchor is not our
+film. Two fallbacks back it up: a duration change mid-playback also marks a
+boundary, and peers share the film's duration with each other so a peer stuck
+behind a pre-roll can still tell what it is looking at.
+
+What I could **not** verify is an actual ad, because YouTube did not serve one in
+any of the test playbacks — ads in embeds are non-deterministic, and this is not
+something a test can force. The logic is covered by unit tests that replay the
+sequences a player produces (pre-roll, mid-roll, back-to-back ads, an ad while
+the duration is still unknown), but replaying a modelled sequence is not the same
+as meeting the real thing. If ads ever appear to be missed or imagined, the
+tolerance and the anchor rules in `src/youtube/adWatcher.ts` are where to look.
+
+Because it is inference, two safety valves exist:
+
+- **The wait is capped at 90 seconds.** An ad state that never clears would
+  otherwise stop the film for everybody with no way back but the panel switch.
+- **Ads never make anyone the room's timing authority.** A peer showing an ad has
+  a frozen playhead, so it is excluded from leadership until its film returns.
+
+### 7c. The room waits for each person's ads rather than letting them fall behind
+
+Ads are per viewer, so the alternatives were: let people drift apart by the
+length of their ads, or stop for each of them. Stopping is what "watch together"
+means, and it is the same thing the room already does for someone whose
+connection stalls. "Wait for everyone" turns it off for people who would rather
+not.
+
+One trap worth recording: **the room must not pause a player during an ad.**
+Pausing an ad pauses the ad — the film is behind it and never arrives — so a room
+waiting for that person would wait for ever. Play, pause and seek are dropped or
+deferred for the length of the ad instead.
+
+### 7d. Clicking the picture drives the room, and YouTube's own controls are off
+
+The embed is loaded with `controls: 0` and a transparent catcher over the frame.
+Two people watching one film need one set of controls: a scrub inside YouTube's
+player moves that person alone and desyncs the room silently, with nothing on
+screen to explain it.
+
+The catcher does not swallow the click — it sends it to the engine, so clicking
+the picture plays and pauses for everybody, which is what people expect a click
+on a video to do. It is removed from the page while an ad is playing, so the Skip
+button stays reachable by the person whose ad it is. Since the catcher covers
+YouTube's own "Watch on YouTube" affordance, an *Open on YouTube* link sits under
+the title instead.
+
+### 7e. Drift is corrected by seeking, not by trimming the rate
+
+A YouTube embed accepts eight fixed playback speeds and rounds anything else back
+to 1× — verified: `setPlaybackRate(1.05)` reads back as `1`. The engine's usual
+correction, running a few percent fast or slow where nobody can hear it, does
+nothing at all here.
+
+So for a player that reports it cannot trim its rate, the engine drops the
+threshold at which it gives up and seeks (0.7s rather than 2s). The result is an
+occasional small jump instead of two seconds of silent drift. A jump is more
+noticeable than a rate nudge; two seconds out of sync is more noticeable still.
+
+---
+
 ## Sync behaviour
 
 ### 8. Aiming far tighter than 3–5 seconds
@@ -376,6 +466,21 @@ add — the transport carries arbitrary messages already.
   that is not the same as having held a phone.
 - **Two people on different networks.** Everything so far was browser tabs on
   one machine. NAT traversal is the untested part.
+- **A real YouTube ad.** YouTube served none during testing, and ads in embeds
+  cannot be forced. Everything the ad handling rests on *was* checked against the
+  live player — the cued-duration anchor, the playback-rate rounding, the state
+  sequence at startup — but the ad path itself has only been exercised against
+  modelled sequences. See 7b.
+- **YouTube fullscreen on an iPhone.** iOS gives the Fullscreen API to `<video>`
+  elements only, and there is no `<video>` here to hand it. Fullscreen works for
+  YouTube on a desktop and on Android; on an iPhone the button will do nothing.
+
+What *was* verified end-to-end with two real browsers on a real WebRTC
+connection: a YouTube video cueing on both peers with the same duration, play,
+pause and seek propagating between them, the two playheads staying within about
+a second, the room's controls driving the embed, click-to-pause going through
+the room, the title arriving from oEmbed, a `?t=` start time being honoured, and
+the "owner does not allow embedding" refusal showing its explanation.
 
 One thing worth knowing: during testing a third peer once failed its initial
 WebRTC handshake and recovered on reload. Peer connection is inherently
@@ -393,3 +498,9 @@ clears itself the moment anyone connects.
    exercises NAT traversal properly.
 4. Play, seek, and pause from both ends; watch the drift readout under the title.
 5. Put the phone in a lift or turn Wi-Fi off briefly to see the buffering gate.
+6. Then do it again with a YouTube link, and pick something monetised enough to
+   actually serve an ad — a music video is the reliable choice. What to watch
+   for: the other screen stops and says *"… has an ad"* rather than *Buffering*,
+   the Skip button is clickable on the screen showing the ad, and both playheads
+   line up again when it ends. That is the one behaviour I could not make
+   YouTube demonstrate on demand (see 7b).

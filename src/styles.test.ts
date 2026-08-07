@@ -26,6 +26,12 @@ const REQUIRED: [selector: string, property: string][] = [
   ['.video', 'object-fit'],
   ['.player', 'position'],
   ['.stage', 'position'],
+  // The YouTube embed has no intrinsic sizing of its own: unstyled, the iframe
+  // falls back to the API's default 640x390 and sits in the corner of a black
+  // stage. The shield must cover the frame exactly, or clicks reach YouTube's
+  // player and pause one screen out of two.
+  ['.yt-stage', 'position'],
+  ['.yt-shield', 'position'],
   ['.controls', 'background'],
   // Overlays carry every empty and error state; unstyled they lose their
   // backdrop and sit as bare text over the film.

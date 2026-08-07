@@ -87,7 +87,9 @@ function statusLine(p: PeerView, snap: Snapshot): string {
   if (p.stale) return 'Reconnecting…'
   if (!snap.media) return 'Waiting for a video'
   const bits: string[] = []
-  bits.push(p.ready ? formatTime(p.time) : 'Buffering…')
+  // An ad is not a stall, and telling someone their friend is "buffering" when
+  // they are sitting through a pre-roll sends them to check their Wi-Fi.
+  bits.push(p.inAd ? 'Watching an ad' : p.ready ? formatTime(p.time) : 'Buffering…')
   if (p.ready && p.buffered > 0) bits.push(`${Math.round(p.buffered)}s buffered`)
   if (!p.isSelf && p.rttMs !== null) bits.push(`${Math.round(p.rttMs)}ms`)
   return bits.join(' · ')

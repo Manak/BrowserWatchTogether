@@ -5,7 +5,7 @@ import type { MediaRef } from '../lib/media'
  * over WebRTC data channels — there is no server, so these types *are* the
  * contract between peers. Treat changes as breaking and bump PROTOCOL_VERSION.
  */
-export const PROTOCOL_VERSION = 1
+export const PROTOCOL_VERSION = 2
 
 /** Shared playback intent. `at` is stamped in `origin`'s wall clock. */
 export interface Playback {
@@ -76,6 +76,20 @@ export interface ReadyMsg {
    * loaded anything cannot be the timing authority — its playhead is 0.
    */
   loaded: boolean
+  /**
+   * Sitting through an ad. Ads are served per viewer, so this is the one kind
+   * of "not ready" that nobody else in the room can see coming — it is worth
+   * saying out loud rather than showing everyone a spinner.
+   *
+   * Optional: version 1 peers never send it. Absent reads as "no ad".
+   */
+  ad?: boolean
+  /**
+   * The film's duration as this peer sees it, 0 when unknown. The film is the
+   * same length for everybody, so this is how a peer stuck behind a pre-roll
+   * learns what its own player should be reporting.
+   */
+  contentDuration?: number
 }
 
 export interface PingMsg {
@@ -155,6 +169,24 @@ export const TUNING = {
   resumeLeadMs: 400,
   /** Peers silent for longer than this are treated as gone. */
   peerTimeoutMs: 30000,
+  /**
+   * The longest the room holds for one person's ad break. Two unskippable
+   * fifteens back to back is the realistic worst case, so this is generous —
+   * it exists to stop a mis-read ad state from wedging the film for everyone,
+   * not to cut anybody's ads short.
+   */
+  maxAdWaitMs: 90000,
+  /**
+   * Drift at which a player that cannot trim its rate gives up and seeks.
+   * Well under the 2s used for a <video>, because for those two seconds a
+   * YouTube embed is doing nothing about the drift at all.
+   */
+  seekOnlyDriftSec: 0.7,
 } as const
 
-export type Tuning = typeof TUNING
+/**
+ * Numbers rather than the literal types `as const` would give, so a caller can
+ * derive a variant — the engine builds one for players that cannot trim their
+ * playback rate.
+ */
+export type Tuning = { readonly [K in keyof typeof TUNING]: number }

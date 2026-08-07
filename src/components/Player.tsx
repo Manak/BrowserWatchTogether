@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type RefObject } from 'react'
 import { describeMediaError, type MediaRef } from '../lib/media'
 import type { SyncEngine } from '../sync/engine'
+import { YouTubeStage } from './YouTubeStage'
 
 export interface VideoMeta {
   currentTime: number
@@ -36,6 +37,7 @@ export function Player({
   const reloads = useRef(0)
   const reloadTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [, forceRetry] = useState(0)
+  const isYouTube = media?.kind === 'youtube'
 
   // Cancel any pending recovery when the component goes away.
   useEffect(
@@ -46,16 +48,18 @@ export function Player({
   )
 
   // Hand the element to the engine once; the engine drives play/pause/seek.
+  // YouTube has no element to hand over — the stage attaches its own adapter.
   useEffect(() => {
+    if (isYouTube) return
     engine.attachMedia(videoRef.current)
     return () => engine.attachMedia(null)
-  }, [engine, videoRef])
+  }, [engine, videoRef, isYouTube])
 
   // Swap sources only when the URL actually changes, so a re-render never
   // restarts the download.
   useEffect(() => {
     const el = videoRef.current
-    if (!el) return
+    if (!el || isYouTube) return
     const url = media?.url ?? null
     if (url === lastUrl.current) return
     lastUrl.current = url
@@ -68,7 +72,7 @@ export function Player({
       el.removeAttribute('src')
       el.load()
     }
-  }, [media?.url, videoRef, onError])
+  }, [media?.url, videoRef, onError, isYouTube])
 
   useEffect(() => {
     const el = videoRef.current
@@ -86,6 +90,22 @@ export function Player({
       duration: Number.isFinite(el.duration) ? el.duration : 0,
       bufferedEnd: b.length ? b.end(b.length - 1) : 0,
     })
+  }
+
+  // YouTube is played by YouTube — an embed is the only sanctioned way, and it
+  // brings its own timeline, its own buffering and its own ads. See
+  // youtube/adapter.ts for how the room drives it all the same.
+  if (media && isYouTube) {
+    return (
+      <YouTubeStage
+        engine={engine}
+        media={media}
+        onMeta={onMeta}
+        onError={onError}
+        muted={muted}
+        volume={volume}
+      />
+    )
   }
 
   return (
