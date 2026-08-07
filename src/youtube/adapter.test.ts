@@ -297,3 +297,112 @@ describe('robustness', () => {
     expect(media.duration).toBe(0)
   })
 })
+
+describe('changes made with YouTube’s own controls', () => {
+  /**
+   * On an iPhone the embed keeps its own control bar, because its fullscreen
+   * button is the only one that works there — and once it is used, our controls
+   * are off the screen entirely. So a drag on YouTube's scrub bar has to become
+   * a seek for the room. The API has no seek event, so it is inferred from a
+   * playhead move that playback cannot account for.
+   */
+  it('spots a scrub on the player’s own bar', () => {
+    const { player, media, tick } = setup(600)
+    tick()
+    player.playVideo()
+    tick(1000)
+    expect(media.takeExternalSeek()).toBeNull()
+
+    player.seekTo(300, true) // the user drags YouTube's bar
+    tick(200)
+    expect(media.takeExternalSeek()).toBeCloseTo(300, 0)
+  })
+
+  it('reports it once, not on every poll after', () => {
+    const { player, media, tick } = setup(600)
+    tick()
+    player.playVideo()
+    tick(1000)
+    player.seekTo(300, true)
+    tick(200)
+    expect(media.takeExternalSeek()).not.toBeNull()
+    tick(200)
+    expect(media.takeExternalSeek()).toBeNull()
+  })
+
+  it('does not mistake ordinary playback for a scrub', () => {
+    const { player, media, tick } = setup(600)
+    tick()
+    player.playVideo()
+    for (let i = 0; i < 20; i++) {
+      tick(200)
+      expect(media.takeExternalSeek()).toBeNull()
+    }
+  })
+
+  it('does not read our own seek back as somebody else’s', () => {
+    const { player, media, tick } = setup(600)
+    tick()
+    player.playVideo()
+    tick(1000)
+    media.currentTime = 420
+    tick(200)
+    expect(media.takeExternalSeek()).toBeNull()
+  })
+
+  /** An ad rewrites the playhead all by itself; that is not a person. */
+  it('does not read an ad break as a scrub', () => {
+    const { player, media, tick } = setup(600)
+    tick()
+    player.playVideo()
+    tick(10_000)
+
+    player.startAd(15)
+    tick(200)
+    expect(media.takeExternalSeek()).toBeNull()
+    tick(5000)
+    expect(media.takeExternalSeek()).toBeNull()
+
+    player.endAd()
+    tick(200)
+    expect(media.takeExternalSeek()).toBeNull()
+  })
+})
+
+describe('telling "not started yet" from "somebody paused it"', () => {
+  /**
+   * Only matters where the room adopts what the player does — an iPhone, where
+   * YouTube's controls are the ones on screen. Loading a video puts it in CUED,
+   * which reads as paused; without this, a peer joining a room that is already
+   * playing would announce that as a pause and stop the film for everybody.
+   */
+  it('does not claim to have started while merely cued', () => {
+    const { media, tick } = setup(600)
+    tick()
+    expect(media.paused).toBe(true)
+    expect(media.hasStarted).toBe(false)
+  })
+
+  it('claims it once the player has actually played', () => {
+    const { player, media, tick } = setup(600)
+    tick()
+    player.playVideo()
+    tick()
+    expect(media.hasStarted).toBe(true)
+
+    // And a genuine pause afterwards still reads as a pause.
+    player.pauseVideo()
+    tick()
+    expect(media.paused).toBe(true)
+    expect(media.hasStarted).toBe(true)
+  })
+
+  it('forgets it when a different video is loaded', () => {
+    const { player, media, tick } = setup(600)
+    tick()
+    player.playVideo()
+    tick()
+    media.resetFor(0)
+    expect(media.hasStarted).toBe(false)
+  })
+})

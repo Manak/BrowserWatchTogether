@@ -114,18 +114,31 @@ export function resetYouTubeApiForTests(): void {
 }
 
 /**
- * `controls: 0` is deliberate. Two people watching one film need one set of
- * controls, and YouTube's belong to whoever's screen they are on — a scrub
- * there moves that person alone and desyncs the room silently. Ours go through
- * the engine, so they move everybody.
+ * `controls: 0` is the default, and it is deliberate. Two people watching one
+ * film need one set of controls, and YouTube's belong to whoever's screen they
+ * are on — a scrub there moves that person alone and desyncs the room silently.
+ * Ours go through the engine, so they move everybody.
+ *
+ * `nativeControls` is the exception, for browsers that cannot put an element
+ * into fullscreen — which in practice means an iPhone. There, YouTube's own
+ * fullscreen button is the *only* way into fullscreen, and it only exists as
+ * part of its control bar, so the bar has to come with it. The room copes by
+ * adopting whatever those controls do rather than fighting them, exactly as it
+ * already does with Apple's native player for a Drive file.
  */
-export function defaultPlayerVars(origin: string): Record<string, string | number> {
+export function defaultPlayerVars(
+  origin: string,
+  opts: { nativeControls?: boolean } = {},
+): Record<string, string | number> {
+  const native = opts.nativeControls === true
   return {
-    controls: 0,
+    controls: native ? 1 : 0,
+    // The keyboard is ours either way: this is a desktop concern, and the room
+    // already binds the same keys.
     disablekb: 1,
     modestbranding: 1,
     rel: 0,
-    fs: 0,
+    fs: native ? 1 : 0,
     iv_load_policy: 3,
     playsinline: 1,
     enablejsapi: 1,

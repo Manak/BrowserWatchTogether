@@ -45,6 +45,16 @@ const PLAY_TIMEOUT_MS = 2500
  */
 const BUFFER_GRACE_MS = 1500
 
+/**
+ * A playhead move larger than this, with nothing to explain it, was somebody
+ * dragging YouTube's scrub bar. Ordinary playback advances a fraction of a
+ * second between polls, so the gap between "playing" and "scrubbed" is wide.
+ */
+const EXTERNAL_SEEK_SEC = 1.5
+
+/** Our own seeks take a moment to land; do not read them back as somebody else's. */
+const SEEK_SETTLE_MS = 1200
+
 export interface AdapterOptions {
   now?: () => number
   /** Position from a `?t=` in the pasted link. */
@@ -98,6 +108,14 @@ export class YouTubeMedia implements MediaElementLike {
   private volume = 1
   /** When the player entered BUFFERING, or 0 when it is not waiting. */
   private bufferingSince = 0
+  /** True once the player has actually played something. */
+  private started = false
+
+  /** Previous sample, for spotting a jump nothing accounts for. */
+  private lastSampleAt = 0
+  private lastSampleTime = 0
+  /** An unexplained jump, waiting to be reported to the engine once. */
+  private externalSeek: number | null = null
 
   constructor(player: YtPlayerLike | null, opts: AdapterOptions = {}) {
     this.player = player
@@ -120,6 +138,7 @@ export class YouTubeMedia implements MediaElementLike {
     const p = this.player
     if (!p || this.destroyed) return this.ad
     const state = safe(() => p.getPlayerState(), YT_STATE.UNSTARTED)
+    if (state === YT_STATE.PLAYING) this.started = true
     if (state === YT_STATE.BUFFERING) {
       if (this.bufferingSince === 0) this.bufferingSince = this.now()
     } else {
@@ -131,6 +150,8 @@ export class YouTubeMedia implements MediaElementLike {
       currentTime: safe(() => p.getCurrentTime(), 0),
       duration: safe(() => p.getDuration(), 0),
     })
+
+    this.detectExternalSeek(state)
 
     // Anything the engine asked for while an ad was on happens now.
     if (!this.ad.adPlaying && this.pendingSeek !== null) {
@@ -153,6 +174,42 @@ export class YouTubeMedia implements MediaElementLike {
     return this.ad
   }
 
+  /**
+   * Somebody dragged YouTube's scrub bar.
+   *
+   * The IFrame API has no seek event, so this is worked out from the playhead:
+   * a move that playback cannot account for, with none of our own seeks
+   * outstanding and no ad in the way, was a person. Reported once and then
+   * cleared, so the caller can hand it to the engine as a room-wide seek
+   * instead of having it quietly corrected away.
+   */
+  takeExternalSeek(): number | null {
+    const t = this.externalSeek
+    this.externalSeek = null
+    return t
+  }
+
+  private detectExternalSeek(state: number): void {
+    const at = this.now()
+    const time = this.ad.contentTime
+    const previousAt = this.lastSampleAt
+    const previousTime = this.lastSampleTime
+    this.lastSampleAt = at
+    this.lastSampleTime = time
+
+    if (previousAt === 0) return
+    // An ad rewrites the playhead all by itself, and our own seeks are ours.
+    if (this.ad.adPlaying) return
+    if (at - this.lastSeekAt < SEEK_SETTLE_MS) return
+    if (this.pendingSeek !== null) return
+
+    const elapsed = Math.max(0, at - previousAt) / 1000
+    const expected = isStarted(state) ? previousTime + elapsed * this.playbackRate : previousTime
+    if (Math.abs(time - expected) > EXTERNAL_SEEK_SEC) {
+      this.externalSeek = time
+    }
+  }
+
   /** The player told us outright that it was not allowed to start. */
   noteAutoplayBlocked(): void {
     this.autoplayBlocked = true
@@ -172,6 +229,19 @@ export class YouTubeMedia implements MediaElementLike {
 
   get inAd(): boolean {
     return this.ad.adPlaying
+  }
+
+  /**
+   * Whether the player has ever played, which is the difference between "the
+   * person paused it" and "it has not begun yet".
+   *
+   * Only meaningful when the room is adopting what this player does. Loading a
+   * video puts it in CUED, which reads as paused — and a peer joining a room
+   * that is already playing would announce that as a pause and stop the film
+   * for everybody.
+   */
+  get hasStarted(): boolean {
+    return this.started
   }
 
   get adElapsedMs(): number {
@@ -361,6 +431,9 @@ export class YouTubeMedia implements MediaElementLike {
     this.ad = this.watcher.view()
     this.pendingSeek = null
     this.autoplayBlocked = false
+    this.started = false
+    this.externalSeek = null
+    this.lastSampleAt = 0
     this.playWaiter?.reject(new Error('media changed'))
     this.playWaiter = null
   }

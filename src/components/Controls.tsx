@@ -12,6 +12,12 @@ interface Props {
   onMuted: (v: boolean) => void
   onVolume: (v: number) => void
   onFullscreen: () => void
+  /**
+   * False when this browser cannot fullscreen what is on the stage, in which
+   * case the button is hidden rather than left there doing nothing. Today that
+   * is an iPhone playing YouTube, where the embed's own button does the job.
+   */
+  canFullscreen: boolean
   disabled: boolean
   /** Voice-chat control, rendered next to the transport buttons. */
   voiceButton?: React.ReactNode
@@ -28,6 +34,7 @@ export function Controls({
   onMuted,
   onVolume,
   onFullscreen,
+  canFullscreen,
   disabled,
   voiceButton,
 }: Props) {
@@ -140,15 +147,17 @@ export function Controls({
             }}
           />
 
-          <button
-            className="btn-icon"
-            type="button"
-            aria-label="Fullscreen"
-            title="Fullscreen"
-            onClick={onFullscreen}
-          >
-            <IconFullscreen />
-          </button>
+          {canFullscreen && (
+            <button
+              className="btn-icon"
+              type="button"
+              aria-label="Fullscreen"
+              title="Fullscreen"
+              onClick={onFullscreen}
+            >
+              <IconFullscreen />
+            </button>
+          )}
         </div>
       </div>
     </div>

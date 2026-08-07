@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { canFullscreenElement } from '../lib/fullscreen'
 import type { MediaRef } from '../lib/media'
 import { describeYouTubeError } from '../lib/youtube'
 import type { SyncEngine } from '../sync/engine'
@@ -46,6 +47,13 @@ export function YouTubeStage({ engine, media, onMeta, onError, muted, volume }: 
   const [inAd, setInAd] = useState(false)
   const videoId = media.videoId ?? ''
   const startAt = media.startAt ?? 0
+  /**
+   * On a browser that cannot fullscreen an element — an iPhone — YouTube's own
+   * fullscreen button is the only one that works, and it only exists as part of
+   * its control bar. So the bar comes back, and with it the click catcher goes
+   * away and the room starts adopting what those controls do.
+   */
+  const nativeControls = !canFullscreenElement()
 
   // Everything is keyed on the video id: a new one tears the player down and
   // builds another, so nothing learned about the last video can leak into it.
@@ -73,7 +81,7 @@ export function YouTubeStage({ engine, media, onMeta, onError, muted, volume }: 
         const player = new YT.Player(mount, {
           videoId,
           host: PLAYER_HOST,
-          playerVars: defaultPlayerVars(window.location.origin),
+          playerVars: defaultPlayerVars(window.location.origin, { nativeControls }),
           events: {
             onReady: (e) => {
               if (cancelled) return
@@ -89,7 +97,20 @@ export function YouTubeStage({ engine, media, onMeta, onError, muted, volume }: 
             onStateChange: () => {
               // The poll below reads the state; this only exists to make the
               // first frame after a transition land promptly.
-              adapter.poll()
+              const view = adapter.poll()
+              // With YouTube's own controls on screen — and, once they are used
+              // to go fullscreen, with ours nowhere to be seen — a tap on them
+              // has to move the room rather than one person. Same bargain the
+              // room already strikes with Apple's native player.
+              // Not before it has ever played: loading a video puts it in CUED,
+              // which reads as paused, and a peer joining a room that is
+              // already playing would announce that as a pause and stop the
+              // film for everybody.
+              if (!nativeControls || view.adPlaying || !adapter.hasStarted) return
+              engine.adoptExternal(
+                adapter.paused ? 'pause' : 'play',
+                adapter.currentTime,
+              )
             },
             onError: (e) => onError(describeYouTubeError(e.data)),
             onAutoplayBlocked: () => adapter.noteAutoplayBlocked(),
@@ -105,6 +126,13 @@ export function YouTubeStage({ engine, media, onMeta, onError, muted, volume }: 
     const timer = setInterval(() => {
       const view = adapter.poll()
       setInAd(view.adPlaying)
+      // A drag on YouTube's scrub bar. There is no event for it, so the
+      // adapter infers it from the playhead; taking it here turns it into a
+      // seek for the whole room.
+      const seeked = adapter.takeExternalSeek()
+      if (seeked !== null && nativeControls) {
+        engine.adoptExternal('seek', seeked)
+      }
       onMeta({
         currentTime: view.contentTime,
         duration: view.contentDuration,
@@ -130,7 +158,7 @@ export function YouTubeStage({ engine, media, onMeta, onError, muted, volume }: 
       mountRef.current?.remove()
       mountRef.current = null
     }
-  }, [engine, videoId, startAt, onMeta, onError])
+  }, [engine, videoId, startAt, onMeta, onError, nativeControls])
 
   useEffect(() => {
     adapterRef.current?.setMuted(muted)
@@ -142,7 +170,7 @@ export function YouTubeStage({ engine, media, onMeta, onError, muted, volume }: 
       {/* Stays empty as far as React is concerned; the effect puts the
           player's own node inside it. */}
       <div className="yt-host" ref={hostRef} />
-      {!inAd && (
+      {!inAd && !nativeControls && (
         // Clicking the picture is how everybody expects to pause a video, and
         // in the embed it would pause one screen out of two. Catching the click
         // and sending it through the engine instead makes it mean what people

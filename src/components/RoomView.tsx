@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { canFullscreenElement } from '../lib/fullscreen'
 import { roomUrl } from '../lib/roomCode'
 import type { SyncEngine } from '../sync/engine'
 import { Controls } from './Controls'
@@ -193,6 +194,13 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
               onMuted={setMuted}
               onVolume={setVolume}
               onFullscreen={immersive.toggle}
+              // A YouTube embed on an iPhone is the one case our button cannot
+              // serve: there is no element this browser will fullscreen, and no
+              // <video> of our own to hand to Apple's player. The embed keeps
+              // its own controls there, and its fullscreen button works.
+              canFullscreen={
+                snap.media?.kind !== 'youtube' || canFullscreenElement()
+              }
               disabled={noMedia}
               voiceButton={<VoiceButton voice={voice} />}
             />
