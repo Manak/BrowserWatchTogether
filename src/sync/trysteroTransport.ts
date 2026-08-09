@@ -65,6 +65,26 @@ export function createTrysteroTransport(opts: TrysteroOptions): Transport {
       // Encrypts the signalling payloads with the room code, so relay operators
       // cannot read them. The code is the shared secret; treat it like one.
       password: opts.roomCode,
+      /**
+       * Send one complete offer rather than a stream of ICE candidates.
+       *
+       * Trickle ICE is the default and it is the right default for signalling
+       * that pushes: each candidate goes out the instant it is found, and the
+       * connection forms as early as possible. Our relay does not push, it
+       * polls — so every candidate is a separate message that has to survive a
+       * store round trip and wait for the other side's next poll, and the
+       * connection has about twenty seconds before Trystero gives up on it.
+       * Whether enough candidates arrived in time was, in practice, a coin
+       * toss: refreshing enough times eventually won it, which is exactly how
+       * this was reported.
+       *
+       * Turning trickle off makes the browser finish gathering first and put
+       * every candidate inside the offer, so a connection needs *one* message
+       * to arrive each way instead of a dozen. It costs a second or two of
+       * gathering before the offer goes out. That is a good trade against a
+       * connection that works sometimes.
+       */
+      trickleIce: false,
       rtcConfig: {
         iceServers: [
           { urls: 'stun:stun.l.google.com:19302' },

@@ -24,7 +24,14 @@ import type { SignalMessage } from '../signal/relay'
 const EAGER_POLL_MS = 900
 /** Then settle down: Trystero re-announces every 5.3s, so this misses nothing. */
 const STEADY_POLL_MS = 3500
-/** How long the eager period lasts after the last change in what we watch. */
+/**
+ * How long the eager period lasts after the last sign of activity.
+ *
+ * Refreshed by traffic rather than counted from joining: a connection being
+ * negotiated is exactly when messages are flowing, and slowing down in the
+ * middle of it is the worst possible moment. It goes quiet on its own once the
+ * room settles.
+ */
 const EAGER_WINDOW_MS = 25_000
 /** A relay that is down should not become a request storm. */
 const ERROR_BACKOFF_MS = [1000, 2000, 5000, 10_000, 20_000]
@@ -158,6 +165,8 @@ class SignalRelay {
       for (const m of body.messages ?? []) {
         if (!m.id || this.seen.has(m.id)) continue
         this.seen.set(m.id, at + SEEN_TTL_MS)
+        // Something is happening, so keep looking often until it stops.
+        this.eagerUntil = at + EAGER_WINDOW_MS
         this.handlers.get(m.topic)?.(m.topic, m.msg)
       }
     } catch {
