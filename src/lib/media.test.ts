@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
+  buildLocalMediaRef,
   buildMediaRef,
   checkDriveIsPublic,
+  checkLocalFile,
   describeMediaError,
   driveDirectUrl,
   driveThumbnailUrl,
@@ -249,5 +251,76 @@ describe('describeMediaError', () => {
 
   it('has a fallback for unknown codes', () => {
     expect(describeMediaError(undefined, 'drive')).toMatch(/Could not load/)
+  })
+})
+
+describe('buildLocalMediaRef', () => {
+  const share = {
+    id: 'share-1',
+    hostId: 'peer-a',
+    size: 1234,
+    mime: 'video/mp4',
+    name: 'holiday.mp4',
+  }
+
+  it('carries the descriptor peers need and no url of its own', () => {
+    const ref = buildLocalMediaRef(share, { setBy: 'Ada', setAt: 1 })
+    expect(ref.kind).toBe('local')
+    // Every browser resolves its own; a shared one would be wrong for someone.
+    expect(ref.url).toBe('')
+    expect(ref.share).toEqual(share)
+  })
+
+  it('falls back to the file name when nobody typed a title', () => {
+    expect(buildLocalMediaRef(share, { setBy: 'Ada', setAt: 1 }).title).toBe(
+      'holiday.mp4',
+    )
+    expect(
+      buildLocalMediaRef(share, { title: 'Movie night', setBy: 'Ada', setAt: 1 })
+        .title,
+    ).toBe('Movie night')
+  })
+})
+
+describe('checkLocalFile', () => {
+  it('accepts an mp4 without comment', () => {
+    expect(
+      checkLocalFile({ name: 'film.mp4', type: 'video/mp4', size: 100 }),
+    ).toEqual({ ok: true, warning: null })
+  })
+
+  it('rejects something that is not a video at all', () => {
+    const result = checkLocalFile({ name: 'notes.pdf', type: 'application/pdf', size: 10 })
+    expect(result.ok).toBe(false)
+  })
+
+  it('rejects an empty file', () => {
+    expect(checkLocalFile({ name: 'film.mp4', type: 'video/mp4', size: 0 }).ok).toBe(
+      false,
+    )
+  })
+
+  it('warns rather than blocks on a container browsers cannot decode', () => {
+    const result = checkLocalFile({ name: 'film.mkv', type: '', size: 100 })
+    expect(result).toMatchObject({ ok: true })
+    expect(result.ok && result.warning).toMatch(/MP4/)
+  })
+
+  it('warns that a phone .mov is probably HEVC', () => {
+    const result = checkLocalFile({ name: 'IMG_0421.mov', type: 'video/quicktime', size: 100 })
+    expect(result).toMatchObject({ ok: true })
+    expect(result.ok && result.warning).toMatch(/HEVC/)
+  })
+})
+
+describe('describeMediaError for a shared file', () => {
+  it('blames the format, not sharing settings, when it will not decode', () => {
+    const message = describeMediaError(4, 'local')
+    expect(message).toMatch(/H\.264/)
+    expect(message).not.toMatch(/Anyone with the link/)
+  })
+
+  it('says a mid-film failure is the other browser, not the file', () => {
+    expect(describeMediaError(2, 'local')).toMatch(/another browser in this room/)
   })
 })

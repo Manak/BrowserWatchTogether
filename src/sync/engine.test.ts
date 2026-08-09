@@ -16,6 +16,23 @@ const MEDIA: MediaRef = {
 
 const OTHER_MEDIA: MediaRef = { ...MEDIA, fileId: 'ZZZ', url: 'https://x/z', title: 'Other' }
 
+/** A film on Ada's laptop, served to the room over the peer connections. */
+const SHARED_FILE: MediaRef = {
+  kind: 'local',
+  fileId: null,
+  url: '',
+  title: 'holiday.mp4',
+  setBy: 'Ada',
+  setAt: 0,
+  share: {
+    id: 'share-1',
+    hostId: 'a',
+    size: 2_000_000_000,
+    mime: 'video/mp4',
+    name: 'holiday.mp4',
+  },
+}
+
 interface Node {
   id: string
   engine: SyncEngine
@@ -749,6 +766,89 @@ describe('buffering coordination', () => {
 
     expect(a.engine.getSnapshot().gated).toBe(false)
     expect(a.video.paused).toBe(false)
+  })
+})
+
+/**
+ * A file shared from someone's disk has one failure mode nothing else has: a
+ * browser that will not play it as it arrives has to copy the whole film across
+ * first. That is minutes, and it must not be confused with buffering.
+ */
+describe('a peer copying a shared file across', () => {
+  it('does not hold the room, however long it takes', () => {
+    const a = sim.add('a', 'Ada')
+    const b = sim.add('b', 'Bo')
+    a.engine.setMedia(SHARED_FILE)
+    a.engine.play()
+    sim.run(2000)
+
+    // Bo cannot play anything yet: no buffer at all, for minutes.
+    b.video.starve(0)
+    b.engine.setFetching(true)
+    sim.run(60_000)
+
+    expect(a.engine.getSnapshot().gated).toBe(false)
+    expect(a.video.paused).toBe(false)
+    expect(a.engine.getSnapshot().waitingFor).toEqual([])
+    // But everyone can see what they are doing, rather than nothing at all.
+    const bo = a.engine.getSnapshot().peers.find((p) => p.name === 'Bo')
+    expect(bo?.fetching).toBe(true)
+  })
+
+  it('joins at wherever the film has got to once the copy lands', () => {
+    const a = sim.add('a', 'Ada')
+    const b = sim.add('b', 'Bo')
+    a.engine.setMedia(SHARED_FILE)
+    a.engine.play()
+    sim.run(1000)
+
+    b.video.starve(0)
+    b.engine.setFetching(true)
+    sim.run(40_000)
+    expect(a.video.currentTime).toBeGreaterThan(35)
+
+    // The copy finishes. Nothing rewinds; Bo lands where the room is.
+    b.engine.setFetching(false)
+    b.video.refill(600)
+    sim.run(6000)
+
+    expect(Math.abs(a.video.currentTime - b.video.currentTime)).toBeLessThan(1)
+    expect(a.engine.getSnapshot().gated).toBe(false)
+  })
+
+  it('goes back to being waited for once it can play again', () => {
+    const a = sim.add('a', 'Ada')
+    const b = sim.add('b', 'Bo')
+    a.engine.setMedia(SHARED_FILE)
+    a.engine.play()
+    sim.run(2000)
+
+    b.engine.setFetching(true)
+    b.video.starve(0)
+    sim.run(5000)
+    expect(a.engine.getSnapshot().gated).toBe(false)
+
+    // Copy done, and now it is an ordinary stall — which the room does wait for.
+    b.engine.setFetching(false)
+    sim.run(3000)
+    expect(a.engine.getSnapshot().gated).toBe(true)
+    expect(a.engine.getSnapshot().waitingFor).toEqual(['Bo'])
+  })
+
+  it("starts a mid-film arrival at the room's position, not at zero", () => {
+    const a = sim.add('a', 'Ada')
+    a.engine.setMedia(SHARED_FILE)
+    a.engine.play()
+    sim.run(30_000)
+    expect(a.video.currentTime).toBeGreaterThan(25)
+
+    // Streaming a shared file means the first bytes fetched are the ones under
+    // the room's playhead, so a late arrival never watches from the beginning.
+    const c = sim.add('c', 'Cy')
+    sim.run(3000)
+
+    expect(c.video.currentTime).toBeGreaterThan(25)
+    expect(Math.abs(a.video.currentTime - c.video.currentTime)).toBeLessThan(1)
   })
 })
 

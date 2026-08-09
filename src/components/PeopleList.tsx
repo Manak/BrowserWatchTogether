@@ -80,12 +80,16 @@ function MicBadge({
 function dotClass(p: PeerView, snap: Snapshot): string {
   if (p.stale) return 'dot-stale'
   if (!snap.media) return 'dot-ok'
+  if (p.fetching) return 'dot-busy'
   return p.ready ? 'dot-ok' : 'dot-busy'
 }
 
 function statusLine(p: PeerView, snap: Snapshot): string {
   if (p.stale) return 'Reconnecting…'
   if (!snap.media) return 'Waiting for a video'
+  // Nobody is waiting for this person, so "buffering" would be doubly wrong:
+  // it is not a stall, and it is not holding anyone up.
+  if (p.fetching) return 'Copying the film across'
   const bits: string[] = []
   // An ad is not a stall, and telling someone their friend is "buffering" when
   // they are sitting through a pre-roll sends them to check their Wi-Fi.

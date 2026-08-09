@@ -72,7 +72,7 @@ function RoomConnection({
   name: string
   onLeave: () => void
 }) {
-  const { engine, voice, joinError } = useRoom(roomCode, name)
+  const { engine, voice, share, joinError } = useRoom(roomCode, name)
 
   // Renames propagate to the room without reconnecting.
   useEffect(() => {
@@ -108,6 +108,7 @@ function RoomConnection({
     <RoomView
       engine={engine}
       voice={voice}
+      shareSession={share}
       roomCode={roomCode}
       name={name}
       joinError={joinError}

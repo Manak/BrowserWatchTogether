@@ -8,45 +8,64 @@ says what I decided, why, and what it would take to change. The ones marked
 
 ## Architecture
 
-### 1. No backend at all — Trystero over public Nostr relays ⚠️
+### 1. There is now a backend, and it is one function ⚠️
 
-You preferred "no server, and if possible no compute". I took that literally.
-[Trystero](https://github.com/dmotz/trystero) gets peers connected using public
-Nostr relays for signalling only; after that, everything is direct
-browser-to-browser WebRTC. The whole app is static files.
+You asked for our own relay instead of public ones, so the app is no longer
+serverless. It is one Netlify function — `netlify/functions/signal.ts`, logic in
+`src/signal/relay.ts` — whose entire job is to hold a WebRTC offer until the
+other browser collects it. Everything after that introduction is still direct
+browser-to-browser, and the relay is not used again for that pair.
 
-**The trade-off:** the relays are free public infrastructure run by strangers.
-They are used for a few hundred bytes at join time and nothing after, but if
-they were all down at once, new peers could not find each other (existing
-connections would keep working). There is no SLA.
+**What changed and why it was right.** The old design used public Nostr relays.
+They cost nothing and answer to nobody, which is the same sentence twice: when
+a room would not connect there was nothing to inspect and nothing to fix. I
+measured them while chasing a join failure and they were, that day, fine — five
+of six carried a real announcement — but "fine today" is the most you can ever
+know about them.
 
-**If you would rather not depend on them,** the alternatives, in increasing
-order of effort: switch the strategy to MQTT or BitTorrent trackers (a one-line
-import change — Trystero ships all of them); point it at your own Nostr relay;
-or move signalling to a Netlify function with a small KV store. `netlify.toml`
-is already in the repo for that path.
+**What it costs, honestly:**
 
-### 1b. Signalling relays are pinned to a curated list
+- **It is polling, not push.** Netlify functions cannot hold a WebSocket open,
+  so the client polls: about once a second while joining, then every 3.5s while
+  the room is open. Joining therefore costs up to a second of latency that a
+  socket would not.
+- **It is metered.** Roughly 2,000 function invocations per person per hour of
+  film. Netlify's free tier is 125,000 a month, so two people watching a few
+  films a week is comfortable and a widely-shared room is not. `STEADY_POLL_MS`
+  in `src/sync/relayStrategy.ts` is the dial if that ever bites.
+- **It is a single point of failure now.** If the function is down, no new room
+  connects — where before, six relays had to fail at once. Existing connections
+  are unaffected, and the client backs off and recovers on its own.
+- **It ties the app to Netlify.** GitHub Pages cannot run it, so that deployment
+  was removed rather than left publishing a build where nothing connects.
 
-Trystero's default is to sample from dozens of community Nostr relays, and
-several are frequently down. A dead relay retries forever — console noise on a
-laptop, wasted battery and mobile data on a phone. So the app pins six
-long-running relays (all verified reachable) and connects to four at a time.
+**What it does not cost: privacy.** Trystero hashes the room code to derive the
+topics and encrypts every payload with it before publishing, so the relay stores
+opaque strings under opaque names. It never sees the room code, the video, or
+who is watching.
 
-Only one needs to work: peers match through whichever relays they have in
-common, and once WebRTC connects the relays are not used again for that pair.
-The list is at the top of `src/sync/trysteroTransport.ts`.
+**One design decision worth recording.** Each message is its own key —
+`<topic>/<sender>/<time>-<nonce>` — rather than a list per room. A list would
+mean read-modify-write, and two peers announcing in the same instant would lose
+one of them. A lost announcement is a peer that is never found, which is the
+failure we had just spent an evening on.
+
+Nothing is kept for more than two minutes, and a poll sweeps what it walks past.
 
 ### 2. No TURN server, so a few networks will fail ⚠️
 
 STUN (free, Google/Cloudflare) handles most home networks. Symmetric NATs and
-strict corporate firewalls need a TURN relay, which must be paid for and always
-on — that would break the "no compute" goal. I chose the goal over the edge
-case.
+strict corporate firewalls need a TURN *media* relay, which is a different
+animal from the signalling relay in 1: it carries the video and audio for the
+whole film, needs UDP and a long-lived process, and therefore cannot live on
+Netlify at any price. That is why replacing the signalling relay did not also
+solve this.
 
-If you and your girlfriend ever cannot connect, this is the most likely reason,
-and it is fixable by adding a TURN provider's credentials to `rtcConfig` in
-`src/sync/trysteroTransport.ts`.
+**This is now the most likely remaining cause of a room that will not connect**,
+since signalling is ours and observable. It is fixable by adding a TURN
+provider's credentials to `rtcConfig` in `src/sync/trysteroTransport.ts` —
+metered, and priced by the gigabyte, because every byte of the film would pass
+through it.
 
 ### 3. Mesh topology, sized for a couple
 
@@ -117,6 +136,102 @@ rewritten to the converted one automatically, query string preserved.
 app shows a warning when a link carries a credential, but the safe habit is to
 treat a room containing such a link as if you had pasted the token into a group
 chat. Related code is in `src/lib/media.ts`.
+
+---
+
+## Playing a file off someone's own computer
+
+### 7g. It is streamed through a service worker, not through MSE or a WebSocket ⚠️
+
+**This is the decision I would look at first in this feature.** There is nowhere
+to upload the film to — the signalling relay in 1 holds a few kilobytes of offer
+for two minutes, not a two-hour film — so the browser holding the file has to
+serve it. The
+question was how the *other* browsers consume it. Four options, and why this one:
+
+| | Needs a server | Plays a plain MP4 | Seek / mid-film join | iPhone |
+| --- | --- | --- | --- | --- |
+| **Service worker + HTTP ranges** (chosen) | no | yes | native | see below |
+| fMP4 over WebSocket into MSE | **yes** | **no** — needs fragmented MP4 | manual | iOS 17.1+ only |
+| WebCodecs + canvas | **yes**, in practice | no — needs demuxing first | manual | 16.4+, audio patchy |
+| Download the whole file first | no | yes | after the wait | yes |
+
+The two streaming alternatives were ruled out by the first two columns before
+the iPhone column mattered. A WebSocket needs something to hold the other end of
+it, which is the one thing this app does not have and the whole reason it is
+free to run; peer connections already exist and already carry voice. And both
+need the media re-packaged: MSE will not accept an ordinary MP4 (it wants
+fragmented MP4, which most files are not), and WebCodecs wants encoded frames,
+which means demuxing the container in JavaScript and re-implementing seeking,
+buffering and A/V sync on top. That is a video player, written from scratch,
+where the browser already ships one.
+
+So the file is served the way every video on the web is served: as byte ranges
+over HTTP. A service worker mints a URL for the share and answers the `<video>`
+element's own range requests by fetching those bytes from the peer. The element
+does not know the difference, and everything it already does well — starting on
+the first chunk, seeking by fetching only what a seek needs, keeping memory flat
+— keeps working. Replies are capped at 512 KB whatever is asked for, so a 4 GB
+film never exists anywhere except the disk it started on.
+
+The consequence worth knowing: **the app now installs a service worker**, though
+only for someone who actually watches a shared file — it is registered lazily,
+so a room watching YouTube never gets one. It caches nothing and ignores every
+request but its own, so it cannot serve anyone a stale build.
+
+### 7h. The fallback for a browser that will not stream, and what it costs ⚠️
+
+Not every browser lets a service worker answer a media element. When the streamed
+URL produces nothing at all, the room falls back to fetching the whole file and
+playing it from memory. It works everywhere and it is genuinely worse: nothing
+plays until everything has arrived, and a two-hour film is a two-hour film in
+RAM.
+
+Which route you get is decided by **trying**, not by a user-agent list: if the
+element reports an error having decoded nothing, the fallback takes over. So a
+browser that gains the capability starts streaming on its own.
+
+One thing this forced, which is worth recording because it is not obvious: a
+peer copying a file across **must not gate the room**. The buffering gate is
+built for a stall that everyone waiting a moment will fix. A full copy is
+minutes, no amount of waiting makes it arrive sooner, and holding the film for
+it would mean one person's slow browser stops the evening for everybody. So it
+is announced as its own state (`fetching` in the ready message), excluded from
+the gate, and shown in the participant list as *Copying the film across*. That
+person joins at whatever point the room has reached — the ordinary late-arrival
+path, which already worked.
+
+### 7i. Sharing requires a desktop; watching does not
+
+Deliberately asymmetric, and the asymmetry is the point: a phone is the audience
+this feature exists for, and a bad host.
+
+Serving the file means uploading the whole film to each viewer, over that
+browser's connection, for as long as the film runs — somebody's mobile data and
+somebody's battery. It only works while the tab is awake and in the room, and
+phones suspend background tabs. And a phone's video library is mostly HEVC
+`.mov` from its own camera, which plays on Apple devices and nowhere else.
+
+The gate is a feature test — a coarse pointer *and* real touch points — rather
+than a user-agent string, so a touchscreen laptop is allowed and an iPad is not.
+An iPad reports itself as desktop Safari and has all three problems above, so
+catching it is the intended answer rather than an accident.
+
+### 7j. The share lives and dies with the tab
+
+There is nowhere to put the file, so there is no persistence. Close or reload the
+page and the share is gone; whoever wants to carry on picks the file again. A
+*dropped connection* is different and survives — the file registry and any
+completed copy outlive the transport, so the watchdog's reconnect does not cost
+a download.
+
+The receivers are told which of the two happened, as far as they can be: the
+overlay says the film is playing from that person's computer, that it will start
+again when they are back, and that a reload means they will have to pick the file
+again.
+
+Nothing is written to disk anywhere. A downloaded copy is held in memory and
+discarded on leaving the room.
 
 ---
 
@@ -532,6 +647,25 @@ add — the transport carries arbitrary messages already.
   live player — the cued-duration anchor, the playback-rate rounding, the state
   sequence at startup — but the ad path itself has only been exercised against
   modelled sequences. See 7b.
+- **Whether an iPhone streams a shared file or falls back to copying it.**
+  ⚠️ **This is the open question in the file-sharing feature.** WebKit has a long
+  history of not routing a `<video>` element's requests through a service
+  worker, and I could not test a real iPhone. If it does route them, an iPhone
+  streams and everything above applies. If it does not, the element errors
+  having decoded nothing, the fallback takes over automatically, and the phone
+  copies the film across before playing — slower, but not broken, and the room
+  does not stop for it. The behaviour is the same either way; only the wait
+  differs. What is *not* in doubt is that the file plays: the fallback needs
+  nothing but a Blob and an object URL.
+
+  Worth testing directly: share a file from the laptop, join from the iPhone,
+  and watch whether it starts within a few seconds (streaming) or shows
+  *Copying the film across* (fallback).
+- **A real transfer between two machines on different networks.** The byte
+  arithmetic is covered end to end by tests — host and client round-tripping
+  real bytes, including the last byte of a file, the middle of one never read
+  from the start, and the tail a browser fetches to find an MP4's index — but
+  that is not the same as a film moving over a real WebRTC connection.
 - **The YouTube fullscreen transition on an iPhone.** The embed keeps its own
   controls there and its fullscreen button is the one that works (see 7f). I
   confirmed on an iPhone that the feature test reads false and that the button
@@ -561,7 +695,13 @@ clears itself the moment anyone connects.
    exercises NAT traversal properly.
 4. Play, seek, and pause from both ends; watch the drift readout under the title.
 5. Put the phone in a lift or turn Wi-Fi off briefly to see the buffering gate.
-6. Then do it again with a YouTube link, and pick something monetised enough to
+6. Then share an MP4 from the laptop and watch it on the phone. What to look
+   for: it starts within a few seconds rather than showing a progress bar (that
+   is the streaming path — see the open question above), seeking from either end
+   moves both, and a phone joining an hour in lands an hour in rather than at
+   the beginning. Then close the laptop tab and check the phone says the film
+   was playing from that computer instead of sitting on a black rectangle.
+7. Then do it again with a YouTube link, and pick something monetised enough to
    actually serve an ad — a music video is the reliable choice. What to watch
    for: the other screen stops and says *"… has an ad"* rather than *Buffering*,
    the Skip button is clickable on the screen showing the ad, and both playheads

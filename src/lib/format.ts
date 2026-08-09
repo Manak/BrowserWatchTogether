@@ -10,6 +10,16 @@ export function formatTime(seconds: number): string {
     : `${mm}:${String(s).padStart(2, '0')}`
 }
 
+/** File sizes, in the units a person would use out loud. */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB'
+  const gb = bytes / 1e9
+  if (gb >= 1) return `${gb.toFixed(gb >= 10 ? 0 : 1)} GB`
+  const mb = bytes / 1e6
+  if (mb >= 1) return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`
+  return `${Math.max(1, Math.round(bytes / 1e3))} KB`
+}
+
 /** Stable, pleasant colour per participant, derived from their peer id. */
 export function colorForId(id: string): string {
   let h = 0

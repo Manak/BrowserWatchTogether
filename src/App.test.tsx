@@ -4,8 +4,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { App } from './App'
 import { ROOM_CODE_RE } from './lib/roomCode'
 
-// Stand in for the WebRTC/Nostr transport so these tests never touch a network.
-vi.mock('trystero/nostr', () => ({
+// Stand in for the WebRTC transport so these tests never touch a network or
+// the signalling relay. Mocked at the strategy, which is the seam where this
+// app stops being pure UI.
+vi.mock('./sync/relayStrategy', () => ({
   selfId: 'self-test-id',
   joinRoom: () => ({
     makeAction: () => ({ send: () => Promise.resolve(), onMessage: null }),

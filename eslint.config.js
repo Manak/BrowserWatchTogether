@@ -24,4 +24,14 @@ export default tseslint.config(
       'no-console': ['warn', { allow: ['warn', 'error'] }],
     },
   },
+  {
+    // The share worker is served from public/ as-is, so it is plain JS and it
+    // runs in a service worker rather than in a page.
+    files: ['public/**/*.js'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: { ...globals.serviceworker, ...globals.browser },
+    },
+  },
 )

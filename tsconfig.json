@@ -4,6 +4,9 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "module": "ESNext",
     "moduleResolution": "bundler",
+    // Vite's config loader resolves imports without a bundler, so the handful
+    // of modules reachable from vite.config.ts spell out their extensions.
+    "allowImportingTsExtensions": true,
     "jsx": "react-jsx",
     "types": ["vite/client", "vitest/globals", "node"],
 
@@ -23,5 +26,11 @@
     "forceConsistentCasingInFileNames": true,
     "noEmit": true
   },
-  "include": ["src", "vite.config.ts", "vitest.setup.ts", "eslint.config.js"]
+  "include": [
+    "src",
+    "netlify",
+    "vite.config.ts",
+    "vitest.setup.ts",
+    "eslint.config.js"
+  ]
 }

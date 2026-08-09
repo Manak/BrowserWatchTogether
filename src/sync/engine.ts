@@ -60,6 +60,8 @@ export interface PeerView {
   stale: boolean
   /** Watching an ad. Not behind, not broken — just waiting it out. */
   inAd: boolean
+  /** Copying a shared file across before it can play anything. */
+  fetching: boolean
 }
 
 export interface Snapshot {
@@ -108,6 +110,7 @@ interface PeerRecord {
   inAd: boolean
   /** When their current ad break started, in our clock. Capped, see isGated. */
   adSince: number
+  fetching: boolean
 }
 
 /** Somebody arriving or leaving, for chimes and on-screen notices. */
@@ -154,6 +157,8 @@ export class SyncEngine {
   private playback: Playback
   private anchor: Anchor
   private waitForEveryone = true
+  /** True while we are copying a shared file across before anything can play. */
+  private fetching = false
 
   private lastSeekAt = -Infinity
   /** When we last drove the element ourselves, to recognise our own echoes. */
@@ -335,6 +340,19 @@ export class SyncEngine {
     )
   }
 
+  /**
+   * Tell the room we are copying a shared file across and cannot play anything
+   * yet. Announced immediately rather than at the next heartbeat: the whole
+   * point is that nobody stops for us, and two seconds of everyone waiting is
+   * two seconds too many.
+   */
+  setFetching(value: boolean): void {
+    if (this.fetching === value) return
+    this.fetching = value
+    this.sendReady(true)
+    this.invalidate()
+  }
+
   setName(name: string): void {
     this.name = name
     this.transport.send({ t: 'hello', v: PROTOCOL_VERSION, name, reply: false })
@@ -413,6 +431,7 @@ export class SyncEngine {
       rttMs: null,
       stale: false,
       inAd: this.selfInAd(),
+      fetching: this.fetching,
     }
 
     const others = [...this.peers.values()]
@@ -427,6 +446,7 @@ export class SyncEngine {
         rttMs: this.clock.rttTo(p.id),
         stale: now - p.lastSeen > this.tuning.peerTimeoutMs,
         inAd: p.inAd,
+        fetching: p.fetching,
       }))
       .sort((a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
 
@@ -539,6 +559,7 @@ export class SyncEngine {
         lastSeen: this.now(),
         inAd: false,
         adSince: 0,
+        fetching: false,
       }
       this.peers.set(id, rec)
     }
@@ -630,6 +651,7 @@ export class SyncEngine {
         if (inAd && !rec.inAd) rec.adSince = this.now()
         if (!inAd) rec.adSince = 0
         rec.inAd = inAd
+        rec.fetching = msg.fetching === true
         // The film is the same length for everyone, so the first peer past
         // their ads tells the rest what to measure their own player against.
         if (msg.contentDuration && msg.contentDuration > 0 && !inAd) {
@@ -748,6 +770,7 @@ export class SyncEngine {
       ended: !!this.el?.ended,
       loaded: this.selfCanLead(),
       ad: this.selfInAd(),
+      fetching: this.fetching,
       contentDuration: this.el && Number.isFinite(this.el.duration) ? this.el.duration : 0,
     })
   }
@@ -901,6 +924,9 @@ export class SyncEngine {
       if (p.ready) return false
       if (now - p.lastSeen > this.tuning.peerTimeoutMs) return false
       if (p.inAd && now - p.adSince > this.tuning.maxAdWaitMs) return false
+      // Copying a whole film across is not something the room can help with by
+      // stopping. They catch up on arrival, like any late joiner.
+      if (p.fetching) return false
       return true
     })
   }

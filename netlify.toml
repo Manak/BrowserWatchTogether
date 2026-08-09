@@ -1,7 +1,6 @@
-# Netlify is the fallback host, not the primary one: this app has no backend,
-# so GitHub Pages serves it equally well. Kept here because you asked for a
-# Netlify path if a server ever becomes necessary — at that point add
-# `netlify/functions/*.ts` and Netlify will pick them up without further config.
+# Netlify is the host. The app is still almost entirely static, but it now has
+# one function: the signalling relay that lets two browsers find each other
+# (netlify/functions/signal.ts), routed below.
 
 [build]
   command = "npm run build"
@@ -10,7 +9,23 @@
 [build.environment]
   NODE_VERSION = "22"
 
-# Hash-based routing means every path must serve index.html.
+# Netlify defaults to both of these, but the relay is load-bearing now and a
+# silent default is a bad thing to discover during an outage.
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+# The relay, routed explicitly and *before* the catch-all below. Ordering is
+# the whole point: redirects are matched in order, so without this rule the SPA
+# fallback would answer every signalling request with the page itself and no
+# room would ever connect. Stated here rather than left to the function's own
+# path declaration, because a routing mistake means nobody can join at all.
+[[redirects]]
+  from = "/api/signal"
+  to = "/.netlify/functions/signal"
+  status = 200
+
+# Hash-based routing means every other path serves index.html.
 [[redirects]]
   from = "/*"
   to = "/index.html"
@@ -32,3 +47,10 @@
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "strict-origin-when-cross-origin"
     X-Frame-Options = "SAMEORIGIN"
+
+# Signalling is live by definition, and the relay says so itself; this is here
+# so no CDN in front of it can decide otherwise.
+[[headers]]
+  for = "/api/*"
+  [headers.values]
+    Cache-Control = "no-store"

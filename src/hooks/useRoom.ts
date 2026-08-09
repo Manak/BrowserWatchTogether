@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
+import { FileClient } from '../share/fileClient'
+import { fileHost } from '../share/fileHost'
+import { ShareSession } from '../share/session'
 import { SyncEngine } from '../sync/engine'
 import { ReconnectWatchdog } from '../sync/reconnect'
 import { createTrysteroTransport } from '../sync/trysteroTransport'
 import type { Transport } from '../sync/transport'
 import { configureAudioSession, makeMeter, playRemote } from '../voice/browserAudio'
 import { VoiceChat } from '../voice/voiceChat'
+import { forgetShareUrls } from './useShareUrl'
 
 /** How often the engine re-evaluates drift, buffering and heartbeats. */
 const UPDATE_MS = 250
@@ -14,6 +18,8 @@ const VOICE_UPDATE_MS = 100
 export interface RoomHandle {
   engine: SyncEngine | null
   voice: VoiceChat | null
+  /** Present when this transport can carry file bytes. Null in tests. */
+  share: ShareSession | null
   joinError: string | null
 }
 
@@ -48,6 +54,7 @@ export function useRoom(roomCode: string, initialName: string): RoomHandle {
   const [room, setRoom] = useState<{
     engine: SyncEngine
     voice: VoiceChat
+    share: ShareSession | null
   } | null>(null)
   const [joinError, setJoinError] = useState<string | null>(null)
   /** Bumping this tears the connection down and builds a fresh one. */
@@ -77,6 +84,7 @@ export function useRoom(roomCode: string, initialName: string): RoomHandle {
     let transport: Transport | null = null
     let engine: SyncEngine | null = null
     let voice: VoiceChat | null = null
+    let share: ShareSession | null = null
     const timers: ReturnType<typeof setInterval>[] = []
 
     const connect = async () => {
@@ -104,6 +112,14 @@ export function useRoom(roomCode: string, initialName: string): RoomHandle {
         configureAudioSession,
       })
 
+      // Files shared straight from a disk ride the same peer connections. The
+      // two halves are independent: this browser answers other people's
+      // requests for a file it is sharing, and asks for one it is watching.
+      if (transport.files) {
+        transport.files.onRequest((req) => fileHost.serve(req))
+        share = new ShareSession(new FileClient(transport.files))
+      }
+
       const e = engine
       const v = voice
       timers.push(
@@ -121,7 +137,7 @@ export function useRoom(roomCode: string, initialName: string): RoomHandle {
         }, UPDATE_MS),
         setInterval(() => v.update(), VOICE_UPDATE_MS),
       )
-      setRoom({ engine, voice })
+      setRoom({ engine, voice, share })
       setJoinError(null)
 
       // Ask for the microphone as part of joining, rather than making people
@@ -143,11 +159,23 @@ export function useRoom(roomCode: string, initialName: string): RoomHandle {
       for (const t of timers) clearInterval(t)
       voice?.destroy()
       engine?.destroy()
+      share?.destroy()
       // Recorded so the next connection waits for this to finish deregistering.
       pendingLeave.current = transport?.leave() ?? Promise.resolve()
       setRoom(null)
     }
   }, [roomCode, generation, watchdog])
+
+  // Files and downloaded copies belong to the room, not to one connection, so
+  // they survive a reconnect and are released only on leaving. Nothing here is
+  // written to disk; closing the tab ends the share.
+  useEffect(
+    () => () => {
+      fileHost.clear()
+      forgetShareUrls()
+    },
+    [roomCode],
+  )
 
   // Waking from sleep is the moment the connection is most likely to be a
   // corpse, so tell the watchdog to stop being patient.
@@ -169,5 +197,10 @@ export function useRoom(roomCode: string, initialName: string): RoomHandle {
     }
   }, [watchdog])
 
-  return { engine: room?.engine ?? null, voice: room?.voice ?? null, joinError }
+  return {
+    engine: room?.engine ?? null,
+    voice: room?.voice ?? null,
+    share: room?.share ?? null,
+    joinError,
+  }
 }

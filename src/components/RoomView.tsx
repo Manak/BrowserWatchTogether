@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { formatBytes } from '../lib/format'
 import { canFullscreenElement } from '../lib/fullscreen'
 import { roomUrl } from '../lib/roomCode'
+import { useFileDrop } from '../hooks/useFileDrop'
+import { useShareUrl, type ShareUrlState } from '../hooks/useShareUrl'
+import { canShareLocalFile } from '../lib/device'
+import type { ShareSession } from '../share/session'
+import { firstVideoFile, shareLocalFile } from '../share/shareFile'
 import type { SyncEngine } from '../sync/engine'
 import { Controls } from './Controls'
 import { MediaPicker } from './MediaPicker'
@@ -15,6 +21,8 @@ import { VOICE_OFF, type VoiceChat } from '../voice/voiceChat'
 interface Props {
   engine: SyncEngine
   voice: VoiceChat | null
+  /** Fetches files shared from another person's disk. Null without a transport. */
+  shareSession: ShareSession | null
   roomCode: string
   name: string
   joinError: string | null
@@ -23,7 +31,15 @@ interface Props {
 
 type Tab = 'people' | 'video'
 
-export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: Props) {
+export function RoomView({
+  engine,
+  voice,
+  shareSession,
+  roomCode,
+  name,
+  joinError,
+  onLeave,
+}: Props) {
   const snap = useSyncExternalStore(engine.subscribe, engine.getSnapshot)
   const voiceSnap = useSyncExternalStore(
     voice ? voice.subscribe : NO_SUBSCRIBE,
@@ -46,6 +62,45 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
 
   const onMeta = useCallback((m: VideoMeta) => setMeta(m), [])
   const onError = useCallback((m: string | null) => setMediaError(m), [])
+
+  // A file shared from someone's disk has no URL of its own: each browser
+  // resolves one, and until it has, there is nothing for the element to load.
+  const localShare = snap.media?.kind === 'local' ? (snap.media.share ?? null) : null
+  const hostPresent = !!localShare && snap.peers.some((p) => p.id === localShare.hostId)
+  const shareUrl = useShareUrl(localShare, shareSession, snap.selfId, hostPresent)
+  const src = localShare
+    ? shareUrl.state.status === 'ready'
+      ? shareUrl.state.url
+      : null
+    : (snap.media?.url ?? null)
+
+  // Copying a whole film across is minutes, not seconds. Say so, so the room
+  // carries on without us instead of everyone staring at a spinner; we join at
+  // whatever point they have reached once the copy lands.
+  const copying = shareUrl.state.status === 'preparing'
+  useEffect(() => engine.setFetching(copying), [engine, copying])
+
+  // Dropping a film on the picture is what people try first, so it is worth
+  // supporting rather than making them find the button. Same validation and
+  // same registration as the button — see share/shareFile.ts.
+  const [dropError, setDropError] = useState<string | null>(null)
+  const onFilesDropped = useCallback(
+    (files: FileList) => {
+      const file = firstVideoFile(files)
+      if (!file) return
+      const attempt = shareLocalFile(file, { selfId: snap.selfId, name })
+      if (!attempt.ok) {
+        setDropError(attempt.error)
+        return
+      }
+      setDropError(null)
+      setMediaError(null)
+      engine.setMedia(attempt.ref)
+      setChanging(false)
+    },
+    [engine, name, snap.selfId],
+  )
+  const drop = useFileDrop(playerRef, onFilesDropped, canShareLocalFile())
 
   const share = async () => {
     const url = roomUrl(roomCode)
@@ -143,7 +198,7 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
           <div
             className={`player${
               immersive.active && !immersive.controlsVisible ? ' player-idle' : ''
-            }`}
+            }${drop.dragging ? ' player-drop' : ''}`}
             ref={playerRef}
             onPointerMove={immersive.wake}
             onPointerDown={immersive.wake}
@@ -151,11 +206,13 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
           >
             <div className="stage">
               <Player
-              engine={engine}
-              media={snap.media}
-              videoRef={videoRef}
-              onMeta={onMeta}
+                engine={engine}
+                media={snap.media}
+                src={src}
+                videoRef={videoRef}
+                onMeta={onMeta}
                 onError={onError}
+                onStreamFailed={shareUrl.useDownload}
                 muted={muted}
                 volume={volume}
               />
@@ -172,9 +229,23 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
                 </button>
               )}
 
+              {drop.dragging && (
+                <div className="overlay overlay-soft" role="status">
+                  <div className="overlay-inner">
+                    <p className="overlay-title">Drop to play it together</p>
+                    <p className="overlay-sub">
+                      It stays on this computer and streams to the room.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               <Overlay
                 snap={snap}
                 mediaError={mediaError}
+                dropError={dropError}
+                shareState={localShare ? shareUrl.state : null}
+                shareSize={localShare?.size ?? 0}
                 onUnlock={() => void engine.unlock()}
                 onPick={() => {
                   // The picker lives in the Video tab, so reveal it too —
@@ -301,6 +372,7 @@ export function RoomView({ engine, voice, roomCode, name, joinError, onLeave }: 
                 {showPicker && (
                   <MediaPicker
                     name={name}
+                    selfId={snap.selfId}
                     current={snap.media}
                     onPick={(ref) => {
                       setMediaError(null)
@@ -368,14 +440,38 @@ function StatusChip({
 function Overlay({
   snap,
   mediaError,
+  dropError,
+  shareState,
+  shareSize,
   onUnlock,
   onPick,
 }: {
   snap: ReturnType<SyncEngine['getSnapshot']>
   mediaError: string | null
+  /** A dropped file that was refused before it ever reached the room. */
+  dropError: string | null
+  /** Null unless the room is watching a file from somebody's disk. */
+  shareState: ShareUrlState | null
+  shareSize: number
   onUnlock: () => void
   onPick: () => void
 }) {
+  // Ahead of the empty state, which would otherwise hide it: a refused drop
+  // happens precisely when there is no video yet.
+  if (dropError) {
+    return (
+      <div className="overlay">
+        <div className="overlay-inner">
+          <p className="overlay-title">Can&rsquo;t play that file</p>
+          <p className="overlay-sub">{dropError}</p>
+          <button className="btn btn-primary" type="button" onClick={onPick}>
+            Choose another
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   if (!snap.media) {
     return (
       <div className="overlay">
@@ -399,6 +495,75 @@ function Overlay({
           <button className="btn btn-primary" type="button" onClick={onPick}>
             Use a different link
           </button>
+        </div>
+      </div>
+    )
+  }
+
+  // A shared file's problems are all about the person holding it, so they are
+  // reported before anything the player itself could say.
+  if (shareState && shareState.status !== 'ready') {
+    if (shareState.status === 'waiting') {
+      return (
+        <div className="overlay">
+          <div className="overlay-inner">
+            <p className="overlay-title">Waiting for {snap.media.setBy}</p>
+            <p className="overlay-sub">
+              This film is playing from their computer, so it needs them here.
+              It starts on its own when they are back — though if they reloaded
+              the page, they will have to pick the file again.
+            </p>
+            <button className="btn" type="button" onClick={onPick}>
+              Play something else
+            </button>
+          </div>
+        </div>
+      )
+    }
+    if (shareState.status === 'error') {
+      return (
+        <div className="overlay">
+          <div className="overlay-inner">
+            <p className="overlay-title">Can&rsquo;t get this file</p>
+            <p className="overlay-sub">{shareState.message}</p>
+            <button className="btn btn-primary" type="button" onClick={onPick}>
+              Play something else
+            </button>
+          </div>
+        </div>
+      )
+    }
+    if (shareState.status === 'resolving') {
+      return (
+        <div className="overlay overlay-soft">
+          <div className="overlay-inner">
+            <span className="spinner" aria-hidden="true" />
+            <p className="overlay-title">Getting the film</p>
+            <p className="overlay-sub">
+              It is coming from {snap.media.setBy}&rsquo;s computer.
+            </p>
+          </div>
+        </div>
+      )
+    }
+    const percent = Math.round(shareState.progress * 100)
+    return (
+      <div className="overlay overlay-soft">
+        <div className="overlay-inner">
+          <p className="overlay-title">Copying the film across</p>
+          <p className="overlay-sub">
+            This browser will not play it as it arrives, so it has to come over
+            in full first — {percent}% of {formatBytes(shareSize)}.
+          </p>
+          <div
+            className="share-bar"
+            role="progressbar"
+            aria-valuenow={percent}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div className="share-bar-fill" style={{ width: `${percent}%` }} />
+          </div>
         </div>
       </div>
     )

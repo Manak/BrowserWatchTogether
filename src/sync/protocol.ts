@@ -5,7 +5,7 @@ import type { MediaRef } from '../lib/media'
  * over WebRTC data channels — there is no server, so these types *are* the
  * contract between peers. Treat changes as breaking and bump PROTOCOL_VERSION.
  */
-export const PROTOCOL_VERSION = 2
+export const PROTOCOL_VERSION = 3
 
 /** Shared playback intent. `at` is stamped in `origin`'s wall clock. */
 export interface Playback {
@@ -90,6 +90,19 @@ export interface ReadyMsg {
    * learns what its own player should be reporting.
    */
   contentDuration?: number
+  /**
+   * Copying a shared file across before it can play anything at all.
+   *
+   * A browser that will not stream a peer's file has to fetch the whole thing
+   * first, which for a film is minutes at best. That is not buffering: it has a
+   * definite end, no amount of waiting by anyone else makes it arrive sooner,
+   * and holding the room for it would mean one person's slow start stops the
+   * film for everybody. So the room carries on and this peer joins when its copy
+   * lands — the same path any late arrival takes.
+   *
+   * Optional: peers before version 3 never send it. Absent reads as "no".
+   */
+  fetching?: boolean
 }
 
 export interface PingMsg {

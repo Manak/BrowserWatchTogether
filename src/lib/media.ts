@@ -19,7 +19,26 @@ import {
   youtubeWatchUrl,
 } from './youtube'
 
-export type MediaKind = 'drive' | 'putio' | 'direct' | 'youtube'
+export type MediaKind = 'drive' | 'putio' | 'direct' | 'youtube' | 'local'
+
+/**
+ * A file that exists only on one person's disk.
+ *
+ * There is nowhere to upload it to — the app has no backend — so the browser
+ * holding the file serves byte ranges to the others over the same peer
+ * connections everything else uses. This descriptor is what travels; the bytes
+ * are fetched on demand. See `src/share/`.
+ */
+export interface LocalShare {
+  /** Unique per share, so two files in one evening cannot be confused. */
+  id: string
+  /** Peer id of the browser holding the file. It must stay in the room. */
+  hostId: string
+  size: number
+  /** As reported by the file input; may be empty for an unknown extension. */
+  mime: string
+  name: string
+}
 
 export interface MediaRef {
   kind: MediaKind
@@ -28,6 +47,7 @@ export interface MediaRef {
   /**
    * URL actually handed to <video src>. For YouTube this is the watch page —
    * nothing loads it as media, it is what the "open on YouTube" link points at.
+   * Empty for a local share: each browser builds its own URL for those.
    */
   url: string
   /** Human label shown in the UI. */
@@ -40,6 +60,8 @@ export interface MediaRef {
   videoId?: string
   /** Where to start, from a `?t=` in the pasted link. */
   startAt?: number
+  /** Present only for kind 'local'. */
+  share?: LocalShare
 }
 
 export type ParseResult =
@@ -255,6 +277,78 @@ export function buildMediaRef(
   }
 }
 
+/**
+ * Everything the room needs to know about a file being shared from a disk,
+ * built once by whoever picked it.
+ */
+export function buildLocalMediaRef(
+  share: LocalShare,
+  opts: { title?: string; setBy: string; setAt: number },
+): MediaRef {
+  return {
+    kind: 'local',
+    fileId: null,
+    // Each browser resolves its own URL for these — the host plays the file
+    // directly, everyone else streams it from the host — so there is no single
+    // URL worth putting on the wire.
+    url: '',
+    share,
+    title: opts.title?.trim() || share.name,
+    setBy: opts.setBy,
+    setAt: opts.setAt,
+  }
+}
+
+/** Containers every browser plays, and the ones that reliably fail. */
+const PLAYABLE_EXT = /\.(mp4|m4v|webm|ogv|ogg)$/i
+const UNPLAYABLE_EXT = /\.(mkv|avi|wmv|flv|ts|m2ts|vob|rmvb|divx|3gp)$/i
+
+export type FileCheck =
+  | { ok: true; warning: string | null }
+  | { ok: false; error: string }
+
+/**
+ * Advisory, in the same spirit as the Drive probe: block what is certainly not
+ * a video, warn about what usually will not decode, and let the file itself
+ * have the final word. Whoever picked it sees the result on their own screen
+ * immediately, which is the fastest possible feedback.
+ */
+export function checkLocalFile(file: {
+  name: string
+  type: string
+  size: number
+}): FileCheck {
+  if (file.size === 0) {
+    return { ok: false, error: 'That file is empty.' }
+  }
+  const looksVideo =
+    file.type.startsWith('video/') ||
+    PLAYABLE_EXT.test(file.name) ||
+    UNPLAYABLE_EXT.test(file.name) ||
+    /\.(mov)$/i.test(file.name)
+  if (!looksVideo) {
+    return {
+      ok: false,
+      error: 'That is not a video file. Pick an MP4 (H.264 + AAC) for the widest support.',
+    }
+  }
+  if (UNPLAYABLE_EXT.test(file.name)) {
+    return {
+      ok: true,
+      warning:
+        'Browsers cannot decode this container, so it will probably not play for anyone — including you. MP4 (H.264 + AAC) is the safe choice.',
+    }
+  }
+  if (/\.mov$/i.test(file.name)) {
+    return {
+      ok: true,
+      warning:
+        'A .mov straight from a phone or camera is often HEVC, which plays on Apple devices and nowhere else. If someone sees a black screen, that is why.',
+    }
+  }
+  return { ok: true, warning: null }
+}
+
 export type ShareCheck =
   | { status: 'public' }
   | { status: 'not-public' }
@@ -307,6 +401,14 @@ export function describeMediaError(
   // YouTube never reaches a <video> element, so a MediaError code here would be
   // meaningless; describeYouTubeError handles the player's own codes instead.
   if (kind === 'youtube') return 'YouTube could not play this video.'
+  if (kind === 'local') {
+    // Nothing about a shared file is fixable by sharing settings or a re-paste,
+    // so the advice is about the file itself and about the person holding it.
+    if (code === 3 || code === 4) {
+      return 'This browser cannot decode that file. It has to be a format the browser plays — MP4 with H.264 video and AAC audio works everywhere; MKV, AVI and HEVC generally do not.'
+    }
+    return 'Lost the file part-way through. It is coming from another browser in this room, so this usually means that connection dropped — it should recover on its own.'
+  }
   switch (code) {
     case 1: // MEDIA_ERR_ABORTED
       return 'Loading was cancelled. Try again.'

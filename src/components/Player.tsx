@@ -12,9 +12,21 @@ export interface VideoMeta {
 interface Props {
   engine: SyncEngine
   media: MediaRef | null
+  /**
+   * What to actually load. Usually `media.url`, but a file shared from someone
+   * else's disk resolves to a different URL in every browser — see
+   * `useShareUrl` — and is null while that is still being worked out.
+   */
+  src: string | null
   videoRef: RefObject<HTMLVideoElement | null>
   onMeta: (meta: VideoMeta) => void
   onError: (message: string | null) => void
+  /**
+   * The streamed URL for a shared file produced nothing at all. Some browsers
+   * refuse to let a service worker answer a media element, and this is the only
+   * way to find out; the room then falls back to downloading the file whole.
+   */
+  onStreamFailed?: () => void
   muted: boolean
   volume: number
 }
@@ -27,9 +39,11 @@ const RELOAD_BACKOFF_MS = [1000, 2000, 4000, 8000, 15000, 30000]
 export function Player({
   engine,
   media,
+  src,
   videoRef,
   onMeta,
   onError,
+  onStreamFailed,
   muted,
   volume,
 }: Props) {
@@ -60,7 +74,7 @@ export function Player({
   useEffect(() => {
     const el = videoRef.current
     if (!el || isYouTube) return
-    const url = media?.url ?? null
+    const url = src || null
     if (url === lastUrl.current) return
     lastUrl.current = url
     reloads.current = 0
@@ -72,7 +86,7 @@ export function Player({
       el.removeAttribute('src')
       el.load()
     }
-  }, [media?.url, videoRef, onError, isYouTube])
+  }, [src, videoRef, onError, isYouTube])
 
   useEffect(() => {
     const el = videoRef.current
@@ -136,6 +150,18 @@ export function Player({
       onError={() => {
         const el = videoRef.current
         const code = el?.error?.code
+        // A shared file that produced nothing at all is the signature of a
+        // browser that will not let a service worker answer a media element.
+        // Nothing decoded means nothing to salvage, so take the slow route
+        // rather than showing an error for a file that is perfectly fine.
+        if (
+          media?.kind === 'local' &&
+          onStreamFailed &&
+          (el?.readyState ?? 0) === 0
+        ) {
+          onStreamFailed()
+          return
+        }
         // A dropped connection is not a broken file. Retry, keeping our place,
         // before telling the user anything is wrong.
         if (code === 2 && reloads.current < MAX_RELOADS) {
@@ -145,8 +171,8 @@ export function Player({
           if (reloadTimer.current) clearTimeout(reloadTimer.current)
           reloadTimer.current = setTimeout(() => {
             const v = videoRef.current
-            if (!v || !media) return
-            v.src = media.url
+            if (!v || !src) return
+            v.src = src
             v.load()
             // Restore the position once there is enough of the file to seek.
             const restore = () => {

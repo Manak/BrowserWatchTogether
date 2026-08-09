@@ -1,10 +1,9 @@
 # Watch Together
 
-**Live: https://manak.github.io/BrowserWatchTogether/**
-
 Watch a video in sync with someone else, on a phone or a laptop. No server, no
 database, no accounts. Takes YouTube links, public Google Drive links, put.io
-links, or any direct video URL.
+links, any direct video URL — or a file straight off your own computer, with
+nothing uploaded anywhere.
 
 Two people open the same room code, one pastes a link, and both players stay
 locked to the same frame. Play, pause, and seek propagate to everyone; if one
@@ -19,6 +18,8 @@ microphone as you join, and starts unmuted.
 ## How it works
 
 ```
+              ┌──── /api/signal ────┐   (offers only, once, encrypted)
+              ▼                     ▼
   Browser A  ──────── WebRTC data channel ────────  Browser B
       │            (encrypted, direct, P2P)             │
       │                                                 │
@@ -26,12 +27,15 @@ microphone as you join, and starts unmuted.
                  (each browser downloads independently)
 ```
 
-There is no backend. Two things make that possible:
+The backend is one function that does nothing but introduce two browsers to each
+other. Everything after the introduction is direct.
 
-**Finding each other.** [Trystero](https://github.com/dmotz/trystero) uses
-public Nostr relays to exchange WebRTC connection offers. Once the browsers are
-connected, every message travels directly between them. The relays only ever see
-encrypted signalling blobs — the room code is the encryption password.
+**Finding each other.** [Trystero](https://github.com/dmotz/trystero) handles
+the WebRTC handshake; the offers travel through a relay of our own — one Netlify
+function, about a hundred lines, in `netlify/functions/signal.ts`. Once the
+browsers are connected it is not used again, and while it is, it only ever sees
+encrypted blobs: the topics are hashes of the room code and the payloads are
+encrypted with it. See [The relay](#the-relay).
 
 **Playing the video.** Each browser downloads the file straight into a plain
 `<video>` element — from Google Drive's public download endpoint, from put.io,
@@ -58,6 +62,94 @@ it even by accident, and the two streams simply mix.
 
 **Staying in sync** is the interesting part — see
 [docs/SYNC.md](docs/SYNC.md) for the algorithm.
+
+---
+
+## Playing a file off your own computer
+
+Pick an MP4 in the Video panel and everyone in the room watches it. It is not
+uploaded: the browser holding the file answers the others' requests for byte
+ranges over the connections that already exist, and each of them plays it as it
+arrives.
+
+```
+  Desktop (has film.mp4)                    Phone
+   │                                          │
+   │  ◄── "bytes 41,943,040-42,467,327" ──────┤  <video src=".../__wt-share/x">
+   │  ─── 512 KB ─────────────────────────►   │         ▲
+   │        (WebRTC data channel)             │         │ 206 Partial Content
+   └──────────────────────────────────────────┘   service worker
+```
+
+The trick is the service worker. A `<video>` cannot be pointed at a file on
+somebody else's laptop, so the worker invents a URL for it and answers the
+element's ordinary HTTP range requests by asking the peer. As far as the video
+element is concerned this is a normal video on a normal server, which is what
+makes the useful things fall out for free:
+
+- **Playback starts on the first chunk**, not after the whole file.
+- **Seeking is a range request.** Jumping an hour in fetches the bytes at that
+  point and nothing before them.
+- **Joining mid-film costs nothing.** A late arrival fetches the bytes under the
+  room's playhead. Nobody re-watches the first hour to get to the second.
+- **Memory stays flat.** A reply is capped at 512 KB however much is asked for,
+  so a 4 GB film never exists anywhere but on the disk it started on.
+
+Sharing is deliberately **desktop only**; watching a shared file works
+everywhere, including iPhones, which is the point. Serving one means uploading
+the film to each viewer for as long as it runs, from a tab that has to stay
+awake — a phone fails all of that, and its video library is mostly HEVC `.mov`
+that no other device can decode.
+
+Some browsers will not let a service worker answer a media element. There the
+room falls back to copying the whole file across first and playing it from
+memory; it says so, with a progress bar, and **the rest of the room carries on**
+rather than waiting — that person joins at whatever point the film has reached,
+exactly like anyone arriving late.
+
+Two things to know. The film lasts as long as the tab: close it, or reload it,
+and the share is gone and someone has to pick the file again. And nothing is
+stored — no copy is written to disk on the receiving side, and a downloaded copy
+is discarded when you leave the room.
+
+---
+
+## The relay
+
+Two browsers cannot find each other unaided: somebody has to hold the first
+WebRTC offer until the other side collects it. That is the entire job, and it is
+one Netlify function — `netlify/functions/signal.ts`, with the logic in
+`src/signal/relay.ts`.
+
+It used to be public Nostr relays. They were free and they were somebody else's,
+which is the same sentence twice: when a room would not connect there was
+nothing to look at and nothing to fix.
+
+**What it can see.** Nothing useful. Trystero derives the topics by hashing the
+room code and encrypts every payload with it before publishing, so the relay
+stores opaque strings under opaque names. It never sees the room code, the
+video, or who is watching. It could not join a room if it wanted to.
+
+**What it stores.** One key per message, `<topic>/<sender>/<time>-<nonce>`, in
+Netlify Blobs. A key per message rather than a list per room, deliberately: two
+peers announcing in the same instant would otherwise race over one value and one
+of them would be lost, and a lost announcement is a peer that is never found.
+Nothing survives two minutes — a poll sweeps what it walks past.
+
+**What it costs.** Signalling is HTTP polling, because Netlify functions cannot
+hold a WebSocket open. Roughly one request a second per peer while joining, then
+one every 3.5s for as long as the room is open — call it 2,000 requests per
+person per hour of film. Netlify's free tier covers a couple of people watching
+films regularly; it would not cover a public room. `STEADY_POLL_MS` in
+`src/sync/relayStrategy.ts` is the dial.
+
+**When it is down,** the client backs off rather than hammering it, and picks up
+on its own when it returns. Peers already connected are unaffected — they stopped
+using it the moment they found each other.
+
+**Locally,** `npm run dev` serves the same handler from the same path through a
+Vite middleware (`src/signal/devMiddleware.ts`), backed by memory instead of
+Blobs. One implementation, so "it worked in dev" cannot happen.
 
 ---
 
@@ -180,37 +272,28 @@ CI runs typecheck → lint → test → build on every push
 
 ## Deploying
 
-### GitHub Pages (recommended — the app has no backend)
+**Netlify, and only Netlify.** The app is almost entirely static, but it is no
+longer a static site: it depends on the signalling relay it deploys alongside
+itself (`netlify/functions/signal.ts`). A host that serves only files will serve
+a build in which no room ever connects.
 
-Every push to `main` triggers
-[`.github/workflows/deploy.yml`](.github/workflows/deploy.yml), which runs the
-full check suite, force-pushes the build output to the **`web`** branch, and
-deploys it. That branch contains only generated files and is replaced wholesale
-each time, so it never accumulates a history nobody reads.
+`netlify.toml` has everything: connect the repository and Netlify runs
+`npm run build`, publishes `dist/`, and picks up the function without further
+configuration. The one rule worth knowing about is the redirect order — the
+relay's route is declared *before* the single-page fallback, because a `/*` rule
+that reaches `/api/signal` first would answer every signalling request with the
+page itself.
 
-One-time setup: **Settings → Pages → Source → GitHub Actions**.
+**Netlify Blobs needs no setup** for a site deployed this way; the function
+requests its store by name and gets one.
 
-The `web` branch exists so the deployed files are inspectable as ordinary
-files, but Pages deploys the artifact from this workflow rather than building
-from the branch. Branch mode makes GitHub run its own auto-generated builder,
-which is opaque when it fails and races with this workflow over the same
-commit — one workflow means one deployment and one place to look.
+The build uses relative asset paths, so it works from a subpath or a custom
+domain with no configuration. `public/sample.mp4` is gitignored and only exists
+locally, so it is never published — deploys are reproducible from the repo alone.
 
-The site then lives at `https://manak.github.io/BrowserWatchTogether/`.
-
-The build uses relative asset paths, so it works at both
-`user.github.io/repo/` and a custom domain with no configuration.
-
-Note that the workflow builds from a clean checkout, so `public/sample.mp4` —
-which is gitignored and only exists locally — is never published. Deploys are
-reproducible from the repo alone.
-
-### Netlify
-
-`netlify.toml` is ready: connect the repo and Netlify will run `npm run build`
-and publish `dist/`. Nothing else is needed today. If a server ever does become
-necessary, add TypeScript handlers under `netlify/functions/` and they will be
-picked up automatically.
+There is no GitHub Pages workflow any more, and cannot be: Pages has no way to
+run the relay. `.github/workflows/ci.yml` still runs typecheck → lint → test →
+build on every push, which is what CI was for.
 
 ---
 
@@ -219,10 +302,12 @@ picked up automatically.
 1. **Enter your name.** Required before joining, so everyone knows who is who.
 2. **Start a room**, or join with a code like `sunny-otter-42`.
 3. **Share the code** — tap the room chip to copy the invite link.
-4. **Paste a video link.** A YouTube link of any shape (watch, `youtu.be`,
-   Shorts, embed — a `?t=` start time is kept), Google Drive (*Share → General
-   access → Anyone with the link*; if it is not shared, the app says so before
-   loading), a put.io download link, or any direct video URL.
+4. **Paste a video link,** or on a computer, pick a file. A YouTube link of any
+   shape (watch, `youtu.be`, Shorts, embed — a `?t=` start time is kept), Google
+   Drive (*Share → General access → Anyone with the link*; if it is not shared,
+   the app says so before loading), a put.io download link, any direct video
+   URL, or an MP4 on your own disk — see
+   [Playing a file off your own computer](#playing-a-file-off-your-own-computer).
 5. **Watch.** Anyone can play, pause, or seek; everyone follows. On YouTube,
    clicking the picture plays and pauses for the room rather than for one
    screen.
@@ -283,6 +368,22 @@ Drive account.
 conversion — the original MKV/HEVC file cannot play in a browser. Note also that
 put.io download URLs embed an account-wide `oauth_token`, and the link is shared
 with everyone in the room; the app warns about this when it spots one.
+
+**The film I shared from my computer stopped for everyone.** It plays out of
+that tab, so it needs the tab open, in the room, and awake. Closing or reloading
+the page ends the share and someone has to pick the file again — the others are
+told that is what happened. A dropped connection is different and recovers on
+its own.
+
+**Someone joined and the room did not wait for them.** If their browser cannot
+stream the shared file, it has to copy the whole thing across first, which is
+minutes rather than seconds. Stopping the film for that would be worse than
+letting them catch up, so the room carries on and they join at the current
+point. Their entry in the participant list says *Copying the film across*.
+
+**I cannot share a file from my phone.** That is deliberate — see
+[Playing a file off your own computer](#playing-a-file-off-your-own-computer).
+Watching one somebody else is sharing works on a phone.
 
 **Peers never connect.** The chip says *Can't reach them · retrying*, and it
 means it — a failed connection now rebuilds and tries again with backoff, so

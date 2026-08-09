@@ -52,6 +52,12 @@ const REQUIRED: [selector: string, property: string][] = [
   ['.input', 'font-size'],
   ['.scrub-track', 'position'],
   ['.scrub-input', 'position'],
+  // The file input is hidden behind a button; without this it is visible, and
+  // an unstyled file input in the middle of the picker looks like a bug.
+  ['.visually-hidden', 'position'],
+  ['.player-drop', 'outline'],
+  ['.share-bar', 'overflow'],
+  ['.share-bar-fill', 'background'],
 ]
 
 /** Extract the declaration block for a selector, if it has one. */
