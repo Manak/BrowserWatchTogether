@@ -1,5 +1,5 @@
 import { createTopicStrategy, selfId } from '@trystero-p2p/core'
-import type { BaseRoomConfig } from '@trystero-p2p/core'
+import type { BaseRoomConfig, TopicPublishContext } from '@trystero-p2p/core'
 import type { SignalMessage } from '../signal/relay'
 
 /**
@@ -19,6 +19,29 @@ import type { SignalMessage } from '../signal/relay'
  * the room code and encrypts every payload with it before publishing, so the
  * relay handles opaque strings and could not join a room if it wanted to.
  */
+
+/**
+ * How often we tell Trystero we intend to re-announce.
+ *
+ * This number is load-bearing for a reason that is not obvious from its name.
+ * Trystero derives the deadline for an unanswered offer from it, at 90% of the
+ * interval (`signal-handler.mjs`, `prunePendingOffer`). Left unset, it takes
+ * its 5,333ms default and gives an offer **4.8 seconds** to be answered — a
+ * budget our signalling cannot meet. An offer has to reach the relay, wait out
+ * the far side's poll, wait for that browser to answer, and come back. Miss the
+ * deadline and Trystero discards the offer and starts again on the next
+ * announce, which is precisely the "refresh a few times and it eventually
+ * connects" this app was reported as doing.
+ *
+ * 12s gives a 10.8s deadline, which fits with room to spare.
+ *
+ * It costs nothing in discovery, which is the part that looks like it should.
+ * The relay replays a 20s window (`REPLAY_WINDOW_MS`), so a joiner's very first
+ * poll already sees any announce made in the last twenty seconds — how often we
+ * repeat one does not gate finding anybody. Trystero's own warm-up still fires
+ * the first three announces at 233/533/1333ms regardless.
+ */
+export const ANNOUNCE_INTERVAL_MS = 12_000
 
 /** Poll hard while nobody has answered — this is the wait people feel. */
 const EAGER_POLL_MS = 900
@@ -193,9 +216,31 @@ export const joinRoom = createTopicStrategy<SignalRelay, BaseRoomConfig & RelayC
   ],
   subscribeTopic: (relay, topic, onMessage) =>
     relay.subscribe(topic, (t, msg) => void onMessage(t, msg)),
-  publishTopic: (relay, topic, msg) =>
-    relay.publish(topic, typeof msg === 'string' ? msg : JSON.stringify(msg)),
+  publishTopic: (relay, topic, msg, context) =>
+    announceInterval(
+      relay.publish(topic, typeof msg === 'string' ? msg : JSON.stringify(msg)),
+      context.kind,
+    ),
 })
+
+/**
+ * Publish, then hand Trystero our announce cadence.
+ *
+ * Trystero reads a number back from an *announce* publish and takes it as "come
+ * back in this many ms" — see `ANNOUNCE_INTERVAL_MS` for why we care, which is
+ * not the announcing. Its published types declare this return as `void`, but
+ * `strategy.mjs` reads it (`if (typeof ms === "number")`), so the cast is where
+ * an undocumented contract gets acknowledged rather than hidden. A Trystero
+ * upgrade that drops it fails soft: the interval reverts to the default and
+ * joining gets slower, which is the behaviour we started from.
+ */
+function announceInterval(
+  published: Promise<void>,
+  kind: TopicPublishContext['kind'],
+): Promise<void> {
+  if (kind !== 'announce') return published
+  return published.then(() => ANNOUNCE_INTERVAL_MS as unknown as void)
+}
 
 export { selfId }
 /** Exported for tests, which drive it with a fake clock and a fake fetch. */

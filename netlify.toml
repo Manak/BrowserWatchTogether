@@ -25,6 +25,16 @@
   to = "/.netlify/functions/signal"
   status = 200
 
+# TURN credentials, before the catch-all for the same reason. This one fails
+# softer than the signalling route -- the app falls back to STUN and most rooms
+# never notice -- but the rooms that do need it are exactly the ones that
+# cannot connect at all, so a silent misroute here is invisible until somebody
+# on a mobile network cannot join.
+[[redirects]]
+  from = "/api/turn"
+  to = "/.netlify/functions/turn"
+  status = 200
+
 # Hash-based routing means every other path serves index.html.
 [[redirects]]
   from = "/*"

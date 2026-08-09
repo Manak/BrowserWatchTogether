@@ -3,6 +3,7 @@ import { FileClient } from '../share/fileClient'
 import { fileHost } from '../share/fileHost'
 import { ShareSession } from '../share/session'
 import { SyncEngine } from '../sync/engine'
+import { loadIceServers } from '../sync/iceServers'
 import { ReconnectWatchdog } from '../sync/reconnect'
 import { createTrysteroTransport } from '../sync/trysteroTransport'
 import type { Transport } from '../sync/transport'
@@ -96,8 +97,13 @@ export function useRoom(roomCode: string, initialName: string): RoomHandle {
     const connect = async () => {
       await pendingLeave.current.catch(() => {})
       if (cancelled) return
+      // Prewarmed at startup, so this is a resolved promise in every case that
+      // matters. It cannot reject: no TURN resolves to STUN alone.
+      const iceServers = await loadIceServers()
+      if (cancelled) return
       transport = createTrysteroTransport({
         roomCode,
+        iceServers,
         onJoinError: (message) => {
           setJoinError(message)
           // Trystero only reports this after a peer has been found and the

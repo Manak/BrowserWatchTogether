@@ -1,3 +1,4 @@
+import { DEFAULT_ICE_SERVERS } from './iceServers'
 import { joinRoom, selfId } from './relayStrategy'
 import type { Msg } from './protocol'
 import type { FileChannel, MediaChannel, RangeRequest, Transport } from './transport'
@@ -55,6 +56,8 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 
 export interface TrysteroOptions {
   roomCode: string
+  /** STUN and TURN, already resolved. Falls back to STUN-only when absent. */
+  iceServers?: RTCIceServer[]
   onJoinError?: (message: string) => void
 }
 
@@ -66,30 +69,43 @@ export function createTrysteroTransport(opts: TrysteroOptions): Transport {
       // cannot read them. The code is the shared secret; treat it like one.
       password: opts.roomCode,
       /**
-       * Send one complete offer rather than a stream of ICE candidates.
+       * Trickle ICE, back on — it was turned off to fix the wrong problem.
        *
-       * Trickle ICE is the default and it is the right default for signalling
-       * that pushes: each candidate goes out the instant it is found, and the
-       * connection forms as early as possible. Our relay does not push, it
-       * polls — so every candidate is a separate message that has to survive a
-       * store round trip and wait for the other side's next poll, and the
-       * connection has about twenty seconds before Trystero gives up on it.
-       * Whether enough candidates arrived in time was, in practice, a coin
-       * toss: refreshing enough times eventually won it, which is exactly how
-       * this was reported.
+       * The reasoning for disabling it was that our relay polls rather than
+       * pushes, so each candidate is a separate message that has to survive a
+       * round trip, and "the connection has about twenty seconds" to form. That
+       * budget is not twenty seconds. Trystero gives an unanswered offer 90% of
+       * the announce interval — 4.8s on the default — and turning trickle off
+       * moved the *answering* browser's ICE gathering, which it allows 15s,
+       * inside that window. The offer was being thrown away before an answer
+       * could physically exist.
        *
-       * Turning trickle off makes the browser finish gathering first and put
-       * every candidate inside the offer, so a connection needs *one* message
-       * to arrive each way instead of a dozen. It costs a second or two of
-       * gathering before the offer goes out. That is a good trade against a
-       * connection that works sometimes.
+       * With trickle on, the offer goes out the moment it is created and the
+       * answer comes back without waiting to gather, so the exchange fits
+       * comfortably. Candidates follow and refine the connection rather than
+       * gating it. The losing-candidates problem that motivated this was a
+       * separate bug, in the relay's cursor, and is already fixed: messages are
+       * replayed for a window and de-duplicated by id, so a candidate is no
+       * longer something that can be silently dropped.
+       *
+       * See ANNOUNCE_INTERVAL_MS in relayStrategy.ts for the other half.
        */
-      trickleIce: false,
       rtcConfig: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun.cloudflare.com:3478' },
-        ],
+        /**
+         * STUN first, then whatever TURN we were given.
+         *
+         * Order here is presentational — ICE decides for itself, and it always
+         * prefers a direct path: candidates are checked by priority, and the
+         * spec's own ordering is host > srflx > relay. Which is the behaviour
+         * we want, so the important part of this block is what it does *not*
+         * say. `iceTransportPolicy` is left at its default of `all`. Setting it
+         * to `relay` would force every byte through the TURN server — voice,
+         * and a shared film at a gigabyte a viewer — for rooms that could have
+         * connected directly. TURN is here to rescue the pairs that cannot, and
+         * to give them something that validates on the first check rather than
+         * after ICE has exhausted the direct paths.
+         */
+        iceServers: opts.iceServers ?? DEFAULT_ICE_SERVERS,
       },
     },
     opts.roomCode,

@@ -6,5 +6,10 @@ coverage
 .vite
 .netlify
 
+# Local secrets: the TURN account key. .env.example is the committed template.
+.env
+.env.*
+!.env.example
+
 # Locally generated test fixture (see npm run sample:video)
 public/sample.mp4
