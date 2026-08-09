@@ -8,64 +8,71 @@ says what I decided, why, and what it would take to change. The ones marked
 
 ## Architecture
 
-### 1. There is now a backend, and it is one function ⚠️
+### 1. Signalling is a public Nostr relay again, one per room ⚠️
 
-You asked for our own relay instead of public ones, so the app is no longer
-serverless. It is one Netlify function — `netlify/functions/signal.ts`, logic in
-`src/signal/relay.ts` — whose entire job is to hold a WebRTC offer until the
-other browser collects it. Everything after that introduction is still direct
-browser-to-browser, and the relay is not used again for that pair.
+You asked for our own relay instead of public ones, and we built it: one Netlify
+function, `netlify/functions/signal.ts`, logic in `src/signal/relay.ts`. It
+worked. It also made joining a room take three to six seconds, and four
+successive commits went on trying to fix that before it was clear the cause was
+structural. Netlify cannot hold a WebSocket open, so the client polled, and
+every step of the handshake — announce, offer, answer, each candidate — waited
+out a poll interval. You noticed, went back through the history, and were right.
 
-**What changed and why it was right.** The old design used public Nostr relays.
-They cost nothing and answer to nobody, which is the same sentence twice: when
-a room would not connect there was nothing to inspect and nothing to fix. I
-measured them while chasing a join failure and they were, that day, fine — five
-of six carried a real announcement — but "fine today" is the most you can ever
-know about them.
+So the transport signals over a public Nostr relay again, as it did before
+`f805d7e`, and everything that commit's failures prompted has been kept: the
+TURN credentials from 2, the diagnostics panel, the reconnect watchdog, the
+thirty-second handshake window.
 
-**What it costs, honestly:**
+**The relay code stays in the tree, whole and tested,** as the standby. If the
+public relays go dark or start refusing our events, swapping one import in
+`src/sync/trysteroTransport.ts` is the entire migration. The reason it was built
+has not stopped being true — a public relay answers to nobody — it is just not
+worth six seconds a join until it bites.
 
-- **It is polling, not push.** Netlify functions cannot hold a WebSocket open,
-  so the client polls: about once a second while joining, then every 3.5s while
-  the room is open. Joining therefore costs up to a second of latency that a
-  socket would not.
-- **It is metered.** Roughly 2,000 function invocations per person per hour of
-  film. Netlify's free tier is 125,000 a month, so two people watching a few
-  films a week is comfortable and a widely-shared room is not. `STEADY_POLL_MS`
-  in `src/sync/relayStrategy.ts` is the dial if that ever bites.
-- **It is a single point of failure now.** If the function is down, no new room
-  connects — where before, six relays had to fail at once. Existing connections
-  are unaffected, and the client backs off and recovers on its own.
-- **It ties the app to Netlify.** GitHub Pages cannot run it, so that deployment
-  was removed rather than left publishing a build where nothing connects.
+**What changed on the way back: one relay per room, not six.** The room code is
+hashed and indexes into the pinned pool (`src/sync/nostrRelays.ts`). Both
+browsers hash the same string and land on the same host, which is the only
+property that matters. Handing every room all six meant every room had all six
+in common — six sockets, six announces, six independent offer exchanges to build
+one connection, and six chances for a pair to race each other into a discarded
+offer. One relay each also spreads rooms over the pool rather than stacking them
+onto whichever host is first in the list.
 
-**What it does not cost: privacy.** Trystero hashes the room code to derive the
-topics and encrypts every payload with it before publishing, so the relay stores
-opaque strings under opaque names. It never sees the room code, the video, or
-who is watching.
+**What that costs.** A room is now only as reachable as the one relay its name
+chose; before, five of six could be down and the room still formed. This is the
+item in this document I would most want a second opinion on. `RELAYS_PER_ROOM`
+is a one-character change: at 2, a room keeps a deterministic assignment and
+gets a spare, at the price of bringing the cross-relay racing back.
 
-**One design decision worth recording.** Each message is its own key —
-`<topic>/<sender>/<time>-<nonce>` — rather than a list per room. A list would
+**What none of this costs: privacy.** Trystero hashes the room code to derive
+the topics and encrypts every payload with it before publishing, so the relay
+carries opaque strings under opaque names. It never sees the room code, the
+video, or who is watching — and the operators do not know they are carrying
+WebRTC signalling at all.
+
+**One design decision worth keeping on the record,** because it is the reason
+the standby is trustworthy: in our relay each message is its own key,
+`<topic>/<sender>/<time>-<nonce>`, rather than a list per room. A list would
 mean read-modify-write, and two peers announcing in the same instant would lose
-one of them. A lost announcement is a peer that is never found, which is the
-failure we had just spent an evening on.
+one of them. A lost announcement is a peer that is never found.
 
-Nothing is kept for more than two minutes, and a poll sweeps what it walks past.
-
-### 2. No TURN server, so a few networks will fail ⚠️
+### 2. TURN exists now, and is deliberately not forced
 
 STUN (free, Google/Cloudflare) handles most home networks. Symmetric NATs and
 strict corporate firewalls need a TURN *media* relay, which is a different
-animal from the signalling relay in 1: it carries the video and audio for the
-whole film, needs UDP and a long-lived process, and therefore cannot live on
-Netlify at any price. That is why replacing the signalling relay did not also
-solve this.
+animal from the signalling in 1: it carries the video and audio for the whole
+film. `netlify/functions/turn.ts` mints short-lived Cloudflare credentials from
+a key that never leaves the environment, and `src/sync/iceServers.ts` fetches
+them at startup so joining pays no round trip.
 
-**This is now the most likely remaining cause of a room that will not connect**,
-since signalling is ours and observable. It is fixable by adding a TURN
-provider's credentials to `rtcConfig` in `src/sync/trysteroTransport.ts` —
-metered, and priced by the gigabyte, because every byte of the film would pass
-through it.
+`iceTransportPolicy` is left at its default of `all` rather than `relay`.
+Forcing it would push voice, and a shared film at a gigabyte a viewer, through
+Cloudflare for rooms that could have connected directly. ICE prefers a direct
+path by itself and does.
+
+Every error path falls back to STUN alone, so a deploy with no TURN account — a
+fork, a preview — behaves exactly as the app did before TURN existed. That is
+also the one thing that keeps this app on Netlify rather than any file host.
 
 ### 3. Mesh topology, sized for a couple
 
@@ -144,9 +151,8 @@ chat. Related code is in `src/lib/media.ts`.
 ### 7g. It is streamed through a service worker, not through MSE or a WebSocket ⚠️
 
 **This is the decision I would look at first in this feature.** There is nowhere
-to upload the film to — the signalling relay in 1 holds a few kilobytes of offer
-for two minutes, not a two-hour film — so the browser holding the file has to
-serve it. The
+to upload the film to — the signalling in 1 carries a few kilobytes of offer,
+not a two-hour film — so the browser holding the file has to serve it. The
 question was how the *other* browsers consume it. Four options, and why this one:
 
 | | Needs a server | Plays a plain MP4 | Seek / mid-film join | iPhone |
@@ -551,8 +557,8 @@ anyone*, because that is now what is happening.
 with the app's own `appId` and relay list, reached each other through five of
 the six relays when this was measured. Room-code normalisation, topic derivation
 and the password key derivation are deterministic and identical on both sides.
-If a join still fails after this, the next suspect is the one thing the app
-deliberately does not have — a TURN relay (see 2).
+If a join still fails after this, the next suspects are the single relay that
+room's code selects (see 1) and the network itself (see 2).
 
 ### 13j. Locking a phone used to end the room silently ⚠️
 

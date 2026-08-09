@@ -5,15 +5,19 @@ import type { SignalMessage } from '../signal/relay'
 /**
  * Trystero's signalling, pointed at our own relay instead of at strangers'.
  *
- * Trystero's built-in strategies all lean on somebody else's infrastructure —
- * public Nostr relays, a public MQTT broker, BitTorrent trackers. They cost
- * nothing and answer to nobody, which is the same sentence twice. This replaces
- * them with one endpoint on our own deployment.
+ * **Not currently wired up.** The transport signals over a public Nostr relay
+ * again (`trysteroTransport.ts`, `nostrRelays.ts`). This file, the handler in
+ * `src/signal/`, the Netlify function and their tests are kept whole and green
+ * as the standby: if the public relays go dark or start refusing our events,
+ * swapping the import in `trysteroTransport.ts` is the entire migration.
  *
- * It is HTTP polling rather than a socket because Netlify functions cannot hold
- * a WebSocket open. That is the whole compromise: joining costs one poll
- * interval of latency, and the app pays for its own signalling in function
- * invocations. What it buys is a relay that is up when the site is up.
+ * Why it is the standby rather than the default: it is HTTP polling, because
+ * Netlify functions cannot hold a WebSocket open, and every step of the
+ * handshake then waits out a poll interval. Announce, offer, answer and each
+ * candidate — three to six seconds before two browsers in the same room can see
+ * each other, where a socket costs one round trip each. What it buys, and the
+ * reason it is still here, is a relay that is up when the site is up and that
+ * we can actually look inside when a room will not connect.
  *
  * Nothing sensitive passes through it. Trystero derives the topics by hashing
  * the room code and encrypts every payload with it before publishing, so the

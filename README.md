@@ -18,8 +18,8 @@ microphone as you join, and starts unmuted.
 ## How it works
 
 ```
-              ┌──── /api/signal ────┐   (offers only, once, encrypted)
-              ▼                     ▼
+              ┌──── one Nostr relay ────┐   (offers only, once, encrypted)
+              ▼                         ▼
   Browser A  ──────── WebRTC data channel ────────  Browser B
       │            (encrypted, direct, P2P)             │
       │                                                 │
@@ -27,15 +27,15 @@ microphone as you join, and starts unmuted.
                  (each browser downloads independently)
 ```
 
-The backend is one function that does nothing but introduce two browsers to each
-other. Everything after the introduction is direct.
+Nothing but an introduction passes through a server. Everything after the
+introduction is direct.
 
 **Finding each other.** [Trystero](https://github.com/dmotz/trystero) handles
-the WebRTC handshake; the offers travel through a relay of our own — one Netlify
-function, about a hundred lines, in `netlify/functions/signal.ts`. Once the
-browsers are connected it is not used again, and while it is, it only ever sees
-encrypted blobs: the topics are hashes of the room code and the payloads are
-encrypted with it. See [The relay](#the-relay).
+the WebRTC handshake; the offers travel through one public Nostr relay, chosen
+by the room's own code. Once the browsers are connected it is not used again,
+and while it is, it only ever sees encrypted blobs: the topics are hashes of the
+room code and the payloads are encrypted with it. See
+[Finding each other](#finding-each-other).
 
 **Playing the video.** Each browser downloads the file straight into a plain
 `<video>` element — from Google Drive's public download endpoint, from put.io,
@@ -114,42 +114,59 @@ is discarded when you leave the room.
 
 ---
 
-## The relay
+## Finding each other
 
-Two browsers cannot find each other unaided: somebody has to hold the first
-WebRTC offer until the other side collects it. That is the entire job, and it is
-one Netlify function — `netlify/functions/signal.ts`, with the logic in
-`src/signal/relay.ts`.
+Two browsers cannot find each other unaided: somebody has to carry the first
+WebRTC offer until the other side collects it. That is the entire job, it takes
+a few kilobytes, and once it is done that server is never used again for those
+two people.
 
-It used to be public Nostr relays. They were free and they were somebody else's,
-which is the same sentence twice: when a room would not connect there was
-nothing to look at and nothing to fix.
+**One relay per room, picked by the room's name.** `src/sync/nostrRelays.ts`
+hashes the room code and indexes into a pinned pool of six long-running public
+Nostr relays. Both browsers hash the same string and land on the same host,
+which is the only property that matters — peers on different relays never find
+each other, peers on the same one always do.
 
-**What it can see.** Nothing useful. Trystero derives the topics by hashing the
-room code and encrypts every payload with it before publishing, so the relay
-stores opaque strings under opaque names. It never sees the room code, the
-video, or who is watching. It could not join a room if it wanted to.
+Handing every room all six, which is what this used to do, sounds like
+redundancy and mostly is not: both browsers then opened six sockets, announced
+on six topics and ran six independent offer exchanges to build one connection,
+with six chances for the same pair to race each other into a discarded offer.
+One relay each also spreads rooms over the pool instead of stacking them onto
+whichever host is first in a list.
 
-**What it stores.** One key per message, `<topic>/<sender>/<time>-<nonce>`, in
-Netlify Blobs. A key per message rather than a list per room, deliberately: two
-peers announcing in the same instant would otherwise race over one value and one
-of them would be lost, and a lost announcement is a peer that is never found.
-Nothing survives two minutes — a poll sweeps what it walks past.
+The cost is real and worth stating: a room is only as reachable as the one relay
+its name chose. `RELAYS_PER_ROOM` is the dial — at 2 a room keeps a
+deterministic assignment and gets a spare, at the price of bringing the racing
+back.
 
-**What it costs.** Signalling is HTTP polling, because Netlify functions cannot
-hold a WebSocket open. Roughly one request a second per peer while joining, then
-one every 3.5s for as long as the room is open — call it 2,000 requests per
-person per hour of film. Netlify's free tier covers a couple of people watching
-films regularly; it would not cover a public room. `STEADY_POLL_MS` in
-`src/sync/relayStrategy.ts` is the dial.
+**What the relay can see.** Nothing useful. Trystero derives the topics by
+hashing the room code and encrypts every payload with it before publishing, so
+the relay carries opaque strings under opaque names. It never sees the room
+code, the video, or who is watching. Nostr relay operators have no idea they are
+carrying WebRTC signalling, and could not join a room if they did.
 
-**When it is down,** the client backs off rather than hammering it, and picks up
-on its own when it returns. Peers already connected are unaffected — they stopped
-using it the moment they found each other.
+**What travels over it, and what does not.** Over the relay: the announce, the
+offer, the answer, the ICE candidates. Over the direct connection, from then on:
+the room password handshake, every play/pause/seek, heartbeats, clock sync,
+names, voice audio, and the bytes of a shared film. The socket does stay open
+for the life of the room, re-announcing every few seconds so a *later* joiner
+can still be found — but that is all it carries.
 
-**Locally,** `npm run dev` serves the same handler from the same path through a
-Vite middleware (`src/signal/devMiddleware.ts`), backed by memory instead of
-Blobs. One implementation, so "it worked in dev" cannot happen.
+**We ran our own for a while,** and it is still in the tree:
+`netlify/functions/signal.ts` with the logic in `src/signal/relay.ts` and the
+client in `src/sync/relayStrategy.ts`, whole and tested. The reason for it was
+good — a public relay answers to nobody, so a room that will not connect leaves
+nothing to inspect. The reason it is not the default is better: Netlify cannot
+hold a WebSocket open, so the client had to poll, and every step of the
+handshake then waited out a poll interval. Three to six seconds before two
+browsers in the same room could see each other, against roughly one round trip
+each over a socket. It is kept as the standby — if the public relays go dark,
+swapping the import in `src/sync/trysteroTransport.ts` is the whole migration.
+
+**When a relay is down,** Trystero reconnects on its own with backoff. Peers
+already connected are unaffected — they stopped using it the moment they found
+each other. A room whose relay is unreachable will not form until it returns;
+that is the trade named above.
 
 ---
 
@@ -272,28 +289,31 @@ CI runs typecheck → lint → test → build on every push
 
 ## Deploying
 
-**Netlify, and only Netlify.** The app is almost entirely static, but it is no
-longer a static site: it depends on the signalling relay it deploys alongside
-itself (`netlify/functions/signal.ts`). A host that serves only files will serve
-a build in which no room ever connects.
+**Netlify.** The app is almost entirely static and signalling no longer needs a
+backend at all, so a plain file host would very nearly work. What keeps it here
+is `/api/turn`, which mints the short-lived TURN credentials that rescue the
+pairs that cannot connect directly. Serve only files and most rooms still
+connect; the ones on a symmetric NAT stop connecting, silently.
 
 `netlify.toml` has everything: connect the repository and Netlify runs
-`npm run build`, publishes `dist/`, and picks up the function without further
+`npm run build`, publishes `dist/`, and picks up the functions without further
 configuration. The one rule worth knowing about is the redirect order — the
-relay's route is declared *before* the single-page fallback, because a `/*` rule
-that reaches `/api/signal` first would answer every signalling request with the
-page itself.
+`/api/*` routes are declared *before* the single-page fallback, because a `/*`
+rule that reaches them first would answer every request with the page itself.
 
-**Netlify Blobs needs no setup** for a site deployed this way; the function
-requests its store by name and gets one.
+**The signalling function is deployed but idle.** `netlify/functions/signal.ts`
+is the standby described in [Finding each other](#finding-each-other). It costs
+nothing while nothing calls it, and Netlify Blobs needs no setup for a site
+deployed this way: the function requests its store by name and gets one.
 
 The build uses relative asset paths, so it works from a subpath or a custom
 domain with no configuration. `public/sample.mp4` is gitignored and only exists
 locally, so it is never published — deploys are reproducible from the repo alone.
 
-There is no GitHub Pages workflow any more, and cannot be: Pages has no way to
-run the relay. `.github/workflows/ci.yml` still runs typecheck → lint → test →
-build on every push, which is what CI was for.
+There is no GitHub Pages workflow any more: Pages has no way to run `/api/turn`,
+so it would publish a build that quietly fails for exactly the people who need
+help most. `.github/workflows/ci.yml` still runs typecheck → lint → test → build
+on every push, which is what CI was for.
 
 ---
 
@@ -387,10 +407,11 @@ Watching one somebody else is sharing works on a phone.
 
 **Peers never connect.** The chip says *Can't reach them · retrying*, and it
 means it — a failed connection now rebuilds and tries again with backoff, so
-give it a minute before doing anything. If it never clears, some strict NATs and
-corporate firewalls block direct WebRTC without a TURN relay, which this app
-deliberately does not include (it would need a paid, always-on server). Try a
-different network or a phone hotspot.
+give it a minute before doing anything. Open **Connection details** if it
+persists: it says which of the three failures this is. With TURN credentials
+configured even a symmetric NAT should get through, so a room that still will
+not form usually means the deploy has no TURN key, or the relay this room's code
+chose is unreachable — try a different room code, or a different network.
 
 **My phone locked and the room lost me.** It should recover on its own within
 a few seconds of unlocking — iOS tears down the connection while the screen is

@@ -1,20 +1,33 @@
+import { joinRoom, selfId } from 'trystero/nostr'
 import { DEFAULT_ICE_SERVERS } from './iceServers'
-import { joinRoom, selfId } from './relayStrategy'
+import { relaysForRoom } from './nostrRelays'
 import type { Msg } from './protocol'
 import type { FileChannel, MediaChannel, RangeRequest, Transport } from './transport'
 
 /**
- * The real transport: a WebRTC mesh over one small relay of our own.
+ * The real transport: a WebRTC mesh, introduced over a public Nostr relay.
  *
  * The relay exists only to exchange connection offers, and only until the two
  * browsers have found each other. After that every message below travels
  * directly between them over an encrypted data channel — the relay sees no
  * video, no room code, and nothing it could decrypt.
  *
- * It used to be public Nostr relays. They cost nothing and answer to nobody,
- * which is the same sentence twice: a room that will not connect is then a
- * problem with somebody else's server and there is nothing to look at. See
- * `relayStrategy.ts`.
+ * This was ours for a while: one Netlify function polled over HTTP, in
+ * `src/signal/relay.ts`, which is still in the tree and still tested. It was
+ * built for a good reason — a public relay answers to nobody, so a room that
+ * will not connect leaves nothing to inspect — and it was replaced for a better
+ * one. Netlify cannot hold a WebSocket open, so the client had to poll, and
+ * every step of the handshake then waited out a poll interval: announce, offer,
+ * answer and each candidate, three to six seconds before two browsers in the
+ * same room could see each other. Four commits went on paying that down, and
+ * the fixes were all the same fix. A relay that pushes does not need any of
+ * them. Trystero's own defaults — trickle ICE, a 4.8s offer deadline, a 5.3s
+ * announce — assume push, and are correct again the moment we have it.
+ *
+ * What survived the round trip is worth keeping: TURN credentials from
+ * `iceServers.ts` for the pairs that genuinely cannot connect directly, the
+ * diagnostics panel that says which of the three failures this is, and the
+ * standby relay itself.
  */
 
 export const APP_ID = 'browser-watch-together'
@@ -68,27 +81,32 @@ export function createTrysteroTransport(opts: TrysteroOptions): Transport {
       // Encrypts the signalling payloads with the room code, so relay operators
       // cannot read them. The code is the shared secret; treat it like one.
       password: opts.roomCode,
+      relayConfig: {
+        /**
+         * One relay, chosen by the room's own name. See `nostrRelays.ts` for
+         * why a room gets one rather than the whole pool.
+         *
+         * Note that supplying `urls` means all of them are used: Trystero's
+         * `redundancy` only trims its own default list, so setting it here
+         * would have been silently ignored. Which is what we want — the list
+         * we hand over is already the decision.
+         */
+        urls: relaysForRoom(opts.roomCode),
+        // We surface connection trouble in the UI; a relay that is briefly
+        // unreachable while it reconnects is not worth shouting about.
+        warnOnRelayFailure: false,
+      },
       /**
-       * Trickle ICE, back on — it was turned off to fix the wrong problem.
+       * Trickle ICE is left at Trystero's default of on, which is the right
+       * default for signalling that pushes: each candidate goes out the moment
+       * it is found, so the connection forms as early as it can.
        *
-       * The reasoning for disabling it was that our relay polls rather than
-       * pushes, so each candidate is a separate message that has to survive a
-       * round trip, and "the connection has about twenty seconds" to form. That
-       * budget is not twenty seconds. Trystero gives an unanswered offer 90% of
-       * the announce interval — 4.8s on the default — and turning trickle off
-       * moved the *answering* browser's ICE gathering, which it allows 15s,
-       * inside that window. The offer was being thrown away before an answer
-       * could physically exist.
-       *
-       * With trickle on, the offer goes out the moment it is created and the
-       * answer comes back without waiting to gather, so the exchange fits
-       * comfortably. Candidates follow and refine the connection rather than
-       * gating it. The losing-candidates problem that motivated this was a
-       * separate bug, in the relay's cursor, and is already fixed: messages are
-       * replayed for a window and de-duplicated by id, so a candidate is no
-       * longer something that can be silently dropped.
-       *
-       * See ANNOUNCE_INTERVAL_MS in relayStrategy.ts for the other half.
+       * It was turned off once, when signalling polled and every candidate had
+       * to wait out a poll interval. That made things worse rather than better
+       * — it moved the answering browser's ICE gathering, which Trystero allows
+       * fifteen seconds, inside the 4.8s an unanswered offer gets. Over a
+       * socket neither number is under pressure, so there is nothing here to
+       * tune.
        */
       rtcConfig: {
         /**

@@ -5,9 +5,9 @@ import { App } from './App'
 import { ROOM_CODE_RE } from './lib/roomCode'
 
 // Stand in for the WebRTC transport so these tests never touch a network or
-// the signalling relay. Mocked at the strategy, which is the seam where this
+// the signalling relay. Mocked at Trystero itself, which is the seam where this
 // app stops being pure UI.
-vi.mock('./sync/relayStrategy', () => ({
+vi.mock('trystero/nostr', () => ({
   selfId: 'self-test-id',
   joinRoom: () => ({
     makeAction: () => ({ send: () => Promise.resolve(), onMessage: null }),
