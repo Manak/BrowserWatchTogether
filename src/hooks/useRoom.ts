@@ -84,7 +84,14 @@ export function useRoom(roomCode: string, initialName: string): RoomHandle {
       if (cancelled) return
       transport = createTrysteroTransport({
         roomCode,
-        onJoinError: (message) => setJoinError(message),
+        onJoinError: (message) => {
+          setJoinError(message)
+          // Trystero only reports this after a peer has been found and the
+          // connection to it has failed, so it is evidence that somebody is
+          // waiting on the other side rather than that the room is empty.
+          // Without telling the watchdog, the first attempt was also the last.
+          watchdog.noteJoinFailure(Date.now())
+        },
       })
       engine = new SyncEngine({ transport, name: nameRef.current })
       // Voice rides the same peer connections; it requests nothing from the

@@ -21,10 +21,11 @@ const ACTION = 'wt'
  * which are frequently down — a dead one retries forever, which is console
  * noise on a laptop and wasted battery and mobile data on a phone.
  *
- * These are the long-running, high-uptime public relays, all verified
- * reachable from a browser. We only need one to work: peers are matched
- * through whichever relays they have in common, and once WebRTC connects the
- * relays are not used again for that pair.
+ * These are the long-running, high-uptime public relays. We only need one to
+ * work: peers are matched through whichever relays they have in common, and
+ * once WebRTC connects the relays are not used again for that pair. Measured
+ * again while chasing a join failure — five of the six carried a real room
+ * announcement between two peers, so a join that fails is not this list.
  */
 const RELAY_URLS = [
   'wss://relay.damus.io',
@@ -35,8 +36,11 @@ const RELAY_URLS = [
   'wss://nostr.mom',
 ]
 
-/** How many of the above to hold connections to at once. */
-const RELAY_REDUNDANCY = 4
+/**
+ * How long a found peer has to finish Trystero's room-password handshake
+ * before it is written off. See the note where this is passed in.
+ */
+const HANDSHAKE_TIMEOUT_MS = 30000
 
 export interface TrysteroOptions {
   roomCode: string
@@ -51,8 +55,10 @@ export function createTrysteroTransport(opts: TrysteroOptions): Transport {
       // cannot read them. The code is the shared secret; treat it like one.
       password: opts.roomCode,
       relayConfig: {
+        // Note that supplying `urls` means all of them are used: Trystero's
+        // `redundancy` only trims its own default list, so setting it here
+        // would have been silently ignored.
         urls: RELAY_URLS,
-        redundancy: RELAY_REDUNDANCY,
         // We surface connection trouble in the UI; a single flaky relay out of
         // several is normal and not worth shouting about.
         warnOnRelayFailure: false,
@@ -68,6 +74,14 @@ export function createTrysteroTransport(opts: TrysteroOptions): Transport {
     {
       onJoinError: (details) =>
         opts.onJoinError?.(details.error || 'Could not reach the signalling relays.'),
+      // Trystero's default is ten seconds from the data channel opening to the
+      // room-password challenge completing. That is a comfortable margin
+      // between two tabs on one machine and a tight one between a laptop and a
+      // phone on mobile data, where the channel can be open but slow for its
+      // first few round trips. Losing that race fails the peer outright, so buy
+      // it more time: the cost of waiting is nothing, and the cost of timing
+      // out is the whole room.
+      handshakeTimeoutMs: HANDSHAKE_TIMEOUT_MS,
     },
   )
 

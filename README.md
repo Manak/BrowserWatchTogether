@@ -284,10 +284,12 @@ conversion — the original MKV/HEVC file cannot play in a browser. Note also th
 put.io download URLs embed an account-wide `oauth_token`, and the link is shared
 with everyone in the room; the app warns about this when it spots one.
 
-**Peers never connect.** Some strict NATs and corporate firewalls block direct
-WebRTC without a TURN relay, which this app deliberately does not include (it
-would need a paid, always-on server). Try a different network or a phone
-hotspot.
+**Peers never connect.** The chip says *Can't reach them · retrying*, and it
+means it — a failed connection now rebuilds and tries again with backoff, so
+give it a minute before doing anything. If it never clears, some strict NATs and
+corporate firewalls block direct WebRTC without a TURN relay, which this app
+deliberately does not include (it would need a paid, always-on server). Try a
+different network or a phone hotspot.
 
 **My phone locked and the room lost me.** It should recover on its own within
 a few seconds of unlocking — iOS tears down the connection while the screen is

@@ -408,6 +408,37 @@ over as host and dragged everyone else back with it.
 Catch-up now sends the sender's *actual current playhead* stamped now, so the
 worst case is one network hop of error instead of the whole film.
 
+### 13l. A failed first join used to be permanent
+
+Reported from real use: two people on different networks open the same room,
+both see *Couldn't reach anyone*, and it never clears. Reloading fixed it —
+which is the tell. The connection was retryable and nothing retried.
+
+Two things were wrong, and the first is the interesting one.
+
+**Nothing retried a room that had never worked.** The reconnect watchdog only
+rebuilds a room that has *had* peers and lost them (13j), on the reasoning that
+somebody sitting alone is not broken. But Trystero reports a join error only
+after it has *found* a peer and failed to connect to it — which is the opposite
+of an empty room. That case now arms the watchdog, and it rebuilds with the same
+backoff as everything else. Someone genuinely alone is still left alone.
+
+**Ten seconds was not always enough.** Trystero gives a peer that long, from its
+data channel opening, to finish the room-password challenge; losing that race
+writes the peer off. It is a comfortable margin between two tabs on one machine
+and a tight one between a laptop and a phone on mobile data. It is now thirty.
+Waiting longer costs nothing; timing out costs the room.
+
+The status chip says *Can't reach them · retrying* rather than *Couldn't reach
+anyone*, because that is now what is happening.
+
+**What this was not:** signalling. Two peers announcing on a real room topic,
+with the app's own `appId` and relay list, reached each other through five of
+the six relays when this was measured. Room-code normalisation, topic derivation
+and the password key derivation are deterministic and identical on both sides.
+If a join still fails after this, the next suspect is the one thing the app
+deliberately does not have — a TURN relay (see 2).
+
 ### 13j. Locking a phone used to end the room silently ⚠️
 
 Reported from real use: lock the phone, and the desktop sees you leave; unlock,

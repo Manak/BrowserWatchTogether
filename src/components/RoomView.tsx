@@ -339,9 +339,11 @@ function StatusChip({
   // A join error is per-peer and often transient. If we are talking to
   // somebody, the room is working — do not cry wolf about it.
   if (joinError && !snap.connected) {
+    // Worded as an attempt rather than a verdict, because it is one: a failed
+    // handshake now rebuilds the connection and tries again, with backoff.
     return (
       <span className="chip chip-bad" title={joinError}>
-        Couldn&rsquo;t reach anyone
+        Can&rsquo;t reach them · retrying
       </span>
     )
   }

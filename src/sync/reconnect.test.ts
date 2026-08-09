@@ -12,6 +12,55 @@ describe('ReconnectWatchdog', () => {
     }
   })
 
+  /**
+   * Reported from real use: two people on different networks open the same
+   * room, both see "Couldn't reach anyone", and it never clears. Reloading
+   * fixed it, which is the tell — the connection was retryable and nothing
+   * retried. A failed handshake means a peer was *found*; that is the opposite
+   * of an empty room, and the one case where a room that never worked should
+   * still be rebuilt.
+   */
+  it('retries a room that failed to reach a peer it had found', () => {
+    const w = new ReconnectWatchdog(OPTS)
+    w.noteJoinFailure(1000)
+
+    expect(w.shouldReconnect(false, 2000)).toBe(false)
+    expect(w.shouldReconnect(false, 9500)).toBe(true)
+  })
+
+  it('still leaves someone sitting alone in a fresh room alone', () => {
+    const w = new ReconnectWatchdog(OPTS)
+    // No join failure: nobody has turned up, which is not the same as failing.
+    for (let t = 0; t < 120_000; t += 1000) {
+      expect(w.shouldReconnect(false, t)).toBe(false)
+    }
+  })
+
+  it('backs off across repeated failures rather than hammering', () => {
+    const w = new ReconnectWatchdog(OPTS)
+    w.noteJoinFailure(0)
+
+    const fired: number[] = []
+    for (let t = 500; t < 400_000; t += 500) {
+      if (w.shouldReconnect(false, t)) fired.push(t)
+    }
+    const gaps = fired.slice(1).map((t, i) => t - (fired[i] as number))
+    expect(gaps.length).toBeGreaterThan(3)
+    expect(gaps[gaps.length - 1]).toBeGreaterThan(gaps[0] as number)
+  })
+
+  it('stops retrying once the room finally connects', () => {
+    const w = new ReconnectWatchdog(OPTS)
+    w.noteJoinFailure(0)
+    expect(w.shouldReconnect(false, 9000)).toBe(true)
+
+    w.shouldReconnect(true, 10_000)
+    expect(w.attemptCount).toBe(0)
+    // And a later solitary moment is not treated as the old failure.
+    for (let t = 11_000; t < 100_000; t += 1000) w.shouldReconnect(true, t)
+    expect(w.shouldReconnect(false, 101_000)).toBe(false)
+  })
+
   it('does nothing while peers are present', () => {
     const w = new ReconnectWatchdog(OPTS)
     for (let t = 0; t < 60_000; t += 1000) {
