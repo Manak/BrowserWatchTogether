@@ -20,8 +20,13 @@ export interface RoomHandle {
   voice: VoiceChat | null
   /** Present when this transport can carry file bytes. Null in tests. */
   share: ShareSession | null
+  /** The live peer connections, for the diagnostics panel. */
+  peerConnections: () => Record<string, RTCPeerConnection>
   joinError: string | null
 }
+
+/** Stable identity, so it never re-triggers an effect that depends on it. */
+const NO_CONNECTIONS = (): Record<string, RTCPeerConnection> => ({})
 
 /** Remembers whether the user wants the microphone on when they join. */
 const VOICE_PREF_KEY = 'wt.voice'
@@ -55,6 +60,7 @@ export function useRoom(roomCode: string, initialName: string): RoomHandle {
     engine: SyncEngine
     voice: VoiceChat
     share: ShareSession | null
+    connections: () => Record<string, RTCPeerConnection>
   } | null>(null)
   const [joinError, setJoinError] = useState<string | null>(null)
   /** Bumping this tears the connection down and builds a fresh one. */
@@ -137,7 +143,13 @@ export function useRoom(roomCode: string, initialName: string): RoomHandle {
         }, UPDATE_MS),
         setInterval(() => v.update(), VOICE_UPDATE_MS),
       )
-      setRoom({ engine, voice, share })
+      const t = transport
+      setRoom({
+        engine,
+        voice,
+        share,
+        connections: () => t.media?.connections() ?? {},
+      })
       setJoinError(null)
 
       // Ask for the microphone as part of joining, rather than making people
@@ -206,6 +218,7 @@ export function useRoom(roomCode: string, initialName: string): RoomHandle {
     engine: room?.engine ?? null,
     voice: room?.voice ?? null,
     share: room?.share ?? null,
+    peerConnections: room?.connections ?? NO_CONNECTIONS,
     joinError,
   }
 }

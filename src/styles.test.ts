@@ -56,6 +56,8 @@ const REQUIRED: [selector: string, property: string][] = [
   // an unstyled file input in the middle of the picker looks like a bug.
   ['.visually-hidden', 'position'],
   ['.player-drop', 'outline'],
+  ['.diagnostics', 'border-radius'],
+  ['.diagnostics-body', 'overflow-x'],
   ['.share-bar', 'overflow'],
   ['.share-bar-fill', 'background'],
 ]

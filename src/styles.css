@@ -1019,6 +1019,38 @@ input {
   border: 0;
 }
 
+/* Connection diagnostics: folded away, and readable on a phone when opened. */
+.diagnostics {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-input);
+  font-size: 13px;
+}
+.diagnostics summary {
+  color: var(--text-dim);
+  font-weight: 600;
+  cursor: pointer;
+}
+.diagnostics-verdict {
+  margin: 10px 0 6px;
+  font-weight: 600;
+}
+.diagnostics-error {
+  margin: 10px 0 0;
+  color: var(--bad);
+}
+.diagnostics-body {
+  margin: 0 0 10px;
+  overflow-x: auto;
+  color: var(--text-dim);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 /* A film being dragged over the picture. */
 .player-drop {
   outline: 2px dashed var(--accent);

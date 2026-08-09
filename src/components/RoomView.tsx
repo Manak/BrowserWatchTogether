@@ -8,6 +8,7 @@ import { canShareLocalFile } from '../lib/device'
 import type { ShareSession } from '../share/session'
 import { firstVideoFile, shareLocalFile } from '../share/shareFile'
 import type { SyncEngine } from '../sync/engine'
+import { ConnectionDetails } from './ConnectionDetails'
 import { Controls } from './Controls'
 import { MediaPicker } from './MediaPicker'
 import { PeopleList } from './PeopleList'
@@ -23,6 +24,8 @@ interface Props {
   voice: VoiceChat | null
   /** Fetches files shared from another person's disk. Null without a transport. */
   shareSession: ShareSession | null
+  /** The live peer connections, for the diagnostics panel. */
+  peerConnections: () => Record<string, RTCPeerConnection>
   roomCode: string
   name: string
   joinError: string | null
@@ -35,6 +38,7 @@ export function RoomView({
   engine,
   voice,
   shareSession,
+  peerConnections,
   roomCode,
   name,
   joinError,
@@ -340,6 +344,11 @@ export function RoomView({
                   </p>
                 )}
                 {voice && <VoicePanel voice={voice} />}
+                <ConnectionDetails
+                  connections={peerConnections}
+                  connected={snap.connected}
+                  joinError={joinError}
+                />
                 <label className="switch">
                   <input
                     type="checkbox"
