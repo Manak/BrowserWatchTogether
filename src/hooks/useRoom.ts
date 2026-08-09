@@ -162,7 +162,12 @@ export function useRoom(roomCode: string, initialName: string): RoomHandle {
       share?.destroy()
       // Recorded so the next connection waits for this to finish deregistering.
       pendingLeave.current = transport?.leave() ?? Promise.resolve()
-      setRoom(null)
+      // Deliberately *not* clearing the room here. A rebuild would otherwise
+      // drop the app back to "Joining…" and then rebuild the whole room view,
+      // which reads as the page reloading itself every few seconds — reported
+      // as exactly that. The outgoing engine is destroyed but still answers
+      // getSnapshot, so the room stays on screen, frozen, until the new one
+      // replaces it a moment later. Only leaving the room unmounts this.
     }
   }, [roomCode, generation, watchdog])
 

@@ -70,7 +70,7 @@ describe('a peer talking to our relay', () => {
     a.stop()
   })
 
-  it('delivers each message exactly once, however often it polls', async () => {
+  it('delivers each message exactly once, though the relay replays it', async () => {
     const heard: string[] = []
     const a = new SignalRelay('/api/signal', { selfId: 'peer-a', fetcher: relayFetch() })
     const b = new SignalRelay('/api/signal', { selfId: 'peer-b', fetcher: relayFetch() })

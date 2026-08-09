@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
-import { handleSignal, MESSAGE_TTL_MS, parseKey, type SignalMessage } from './relay'
+import {
+  handleSignal,
+  MESSAGE_TTL_MS,
+  parseKey,
+  REPLAY_WINDOW_MS,
+  type SignalMessage,
+} from './relay'
 import { MemoryStore } from './store'
 
 /**
@@ -23,13 +29,9 @@ async function poll(
   store: MemoryStore,
   topics: string[],
   self: string,
-  since = 0,
 ): Promise<{ now: number; messages: SignalMessage[] }> {
   const res = await handleSignal(
-    {
-      method: 'GET',
-      url: `/api/signal?topics=${topics.join(',')}&self=${self}&since=${since}`,
-    },
+    { method: 'GET', url: `/api/signal?topics=${topics.join(',')}&self=${self}` },
     store,
     now,
   )
@@ -44,7 +46,7 @@ describe('the signalling relay', () => {
 
     const { messages } = await poll(store, ['room1'], 'peer-b')
 
-    expect(messages).toEqual([{ topic: 'room1', msg: 'my offer' }])
+    expect(messages).toMatchObject([{ topic: 'room1', msg: 'my offer' }])
   })
 
   it('never hands a peer its own announcement back', async () => {
@@ -96,16 +98,51 @@ describe('the signalling relay', () => {
     expect(messages.map((m) => m.msg)).toEqual(['offer', 'candidate-1', 'candidate-2'])
   })
 
-  it('does not repeat a message the caller has already had', async () => {
+  /**
+   * The bug this replaced a cursor to fix, stated as a test.
+   *
+   * A write is stamped when the request arrives and becomes visible a store
+   * round trip later. A cursor-based poll landing in that gap saw nothing and
+   * still advanced past the message, losing it for ever. Here the write lands
+   * late — after a poll has already been answered — and must still be
+   * delivered.
+   */
+  it('still delivers a message that became visible after a poll had answered', async () => {
+    const store = new MemoryStore()
+    const stampedAt = clock
+
+    // A poll happens first and sees nothing, as it would mid-write.
+    expect((await poll(store, ['room1'], 'peer-b')).messages).toEqual([])
+
+    // The write lands, carrying its original timestamp — now in the past.
+    clock += 300
+    await store.put(`room1/peer-a/${stampedAt}-late`, 'the answer')
+
+    clock += 900
+    const { messages } = await poll(store, ['room1'], 'peer-b')
+    expect(messages.map((m) => m.msg)).toEqual(['the answer'])
+  })
+
+  it('gives every message a stable id, so repeats can be told apart', async () => {
     const store = new MemoryStore()
     await publish(store, 'room1', 'peer-a', 'offer')
 
     const first = await poll(store, ['room1'], 'peer-b')
-    expect(first.messages).toHaveLength(1)
-
     clock += 1000
-    const second = await poll(store, ['room1'], 'peer-b', first.now)
-    expect(second.messages).toEqual([])
+    const second = await poll(store, ['room1'], 'peer-b')
+
+    expect(first.messages[0]!.id).toBeTruthy()
+    // Replayed rather than withheld, and recognisable as the same message.
+    expect(second.messages[0]!.id).toBe(first.messages[0]!.id)
+  })
+
+  it('stops replaying once a message is older than the window', async () => {
+    const store = new MemoryStore()
+    await publish(store, 'room1', 'peer-a', 'offer')
+    expect((await poll(store, ['room1'], 'peer-b')).messages).toHaveLength(1)
+
+    clock += REPLAY_WINDOW_MS + 1000
+    expect((await poll(store, ['room1'], 'peer-b')).messages).toEqual([])
   })
 
   it('answers about several topics in one request', async () => {

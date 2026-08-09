@@ -16,6 +16,24 @@ import type { SignalStore } from './store.ts'
 /** Messages older than this are dead: an offer nobody answered is not worth keeping. */
 export const MESSAGE_TTL_MS = 120_000
 
+/**
+ * How far back every poll looks, regardless of what the caller has already had.
+ *
+ * There used to be a cursor here: the relay returned its own clock and the
+ * client sent it back as `since`. It dropped messages in production and could
+ * not have done anything else. A write is stamped when the request arrives but
+ * becomes *visible* a store round trip later, so a poll that lands in between
+ * sees nothing and still advances the caller's cursor past it — and the message
+ * is invisible for ever after. With an in-memory store that window is zero
+ * milliseconds wide, which is why it survived every local test and lost ICE
+ * candidates the moment it met a real one.
+ *
+ * So there is no cursor. The relay replays a window and gives every message a
+ * stable id; repeats are the client's problem, and a repeat is free where a
+ * loss is a room that never connects.
+ */
+export const REPLAY_WINDOW_MS = 20_000
+
 /** A single request cannot be used to bulk-delete somebody else's room. */
 const MAX_SWEEP_PER_REQUEST = 200
 
@@ -44,6 +62,8 @@ export interface SignalResponse {
 }
 
 export interface SignalMessage {
+  /** Stable and unique, so the caller can tell a repeat from a new message. */
+  id: string
   topic: string
   msg: string
 }
@@ -139,9 +159,9 @@ async function poll(
 
   const self = url.searchParams.get('self') ?? ''
   if (self && !ID_RE.test(self)) return fail(400, 'Bad sender.')
-  const since = Number(url.searchParams.get('since') ?? 0)
   const at = now()
-  const cutoff = at - MESSAGE_TTL_MS
+  const dead = at - MESSAGE_TTL_MS
+  const window = at - REPLAY_WINDOW_MS
 
   const expired: string[] = []
 
@@ -151,19 +171,22 @@ async function poll(
       for (const key of await store.list(`${topic}/`)) {
         const parsed = parseKey(key)
         if (!parsed) continue
-        if (parsed.at < cutoff) {
+        if (parsed.at < dead) {
           expired.push(key)
           continue
         }
         // Our own announcement coming back would be read as a second peer.
         if (self && parsed.from === self) continue
-        if (Number.isFinite(since) && parsed.at <= since) continue
+        if (parsed.at < window) continue
         wanted.push({ key, at: parsed.at })
       }
       // Oldest first: an offer must arrive before the candidates that follow it.
       wanted.sort((a, b) => a.at - b.at)
       const values = await Promise.all(wanted.map((w) => store.get(w.key)))
-      return values.flatMap((msg) => (msg == null ? [] : [{ topic, msg }]))
+      return wanted.flatMap((w, i) => {
+        const msg = values[i]
+        return msg == null ? [] : [{ id: w.key, topic, msg }]
+      })
     }),
   )
 

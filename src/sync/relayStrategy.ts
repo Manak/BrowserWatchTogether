@@ -28,6 +28,12 @@ const STEADY_POLL_MS = 3500
 const EAGER_WINDOW_MS = 25_000
 /** A relay that is down should not become a request storm. */
 const ERROR_BACKOFF_MS = [1000, 2000, 5000, 10_000, 20_000]
+/**
+ * How long a delivered message is remembered so its replays can be ignored.
+ * Comfortably longer than the relay keeps anything, so nothing is delivered
+ * twice by having been forgotten too early.
+ */
+const SEEN_TTL_MS = 180_000
 
 export interface RelayConfig {
   /** Where the relay lives. Same origin as the app, so no CORS and no config. */
@@ -54,8 +60,15 @@ export interface SignalRelayOptions {
 
 class SignalRelay {
   private readonly handlers = new Map<string, Handler>()
-  /** Server clock of the newest message we have consumed. */
-  private since = 0
+  /**
+   * Messages already delivered upwards, and when they may be forgotten.
+   *
+   * The relay replays a window rather than tracking a cursor for us, because a
+   * cursor loses messages it cannot see yet (see `REPLAY_WINDOW_MS`). Repeats
+   * are filtered here instead, where a mistake costs a duplicate rather than a
+   * connection.
+   */
+  private readonly seen = new Map<string, number>()
   private timer: ReturnType<typeof setTimeout> | null = null
   private polling = false
   private errors = 0
@@ -118,6 +131,14 @@ class SignalRelay {
     return this.now() < this.eagerUntil ? EAGER_POLL_MS : STEADY_POLL_MS
   }
 
+  /** Bounded by the relay's own retention, so this can never grow unchecked. */
+  private forgetSeen(at: number): void {
+    if (this.seen.size < 256) return
+    for (const [id, expires] of this.seen) {
+      if (expires <= at) this.seen.delete(id)
+    }
+  }
+
   private async poll(): Promise<void> {
     if (this.polling || this.closed) return
     const topics = [...this.handlers.keys()]
@@ -127,18 +148,16 @@ class SignalRelay {
       const url = new URL(this.url, location.href)
       url.searchParams.set('topics', topics.join(','))
       url.searchParams.set('self', this.me)
-      url.searchParams.set('since', String(this.since))
       const res = await this.fetcher(url.toString(), { headers: { Accept: 'application/json' } })
       if (!res.ok) throw new Error(`Signalling relay said ${res.status}.`)
       const body = (await res.json()) as { now?: number; messages?: SignalMessage[] }
-
-      // Advance on the *relay's* clock, not ours: comparing our clock against
-      // its timestamps would skip or repeat messages by however far the two
-      // devices disagree, which on a phone is routinely seconds.
-      if (typeof body.now === 'number') this.since = body.now
       this.errors = 0
 
+      const at = this.now()
+      this.forgetSeen(at)
       for (const m of body.messages ?? []) {
+        if (!m.id || this.seen.has(m.id)) continue
+        this.seen.set(m.id, at + SEEN_TTL_MS)
         this.handlers.get(m.topic)?.(m.topic, m.msg)
       }
     } catch {
