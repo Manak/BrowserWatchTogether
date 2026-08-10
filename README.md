@@ -121,23 +121,29 @@ WebRTC offer until the other side collects it. That is the entire job, it takes
 a few kilobytes, and once it is done that server is never used again for those
 two people.
 
-**One relay per room, picked by the room's name.** `src/sync/nostrRelays.ts`
-hashes the room code and indexes into a pinned pool of six long-running public
-Nostr relays. Both browsers hash the same string and land on the same host,
-which is the only property that matters — peers on different relays never find
-each other, peers on the same one always do.
+**Four relays per room, picked by the room's name.** `src/sync/nostrRelays.ts`
+hashes the room code and takes four consecutive hosts from a pinned pool of ten
+public Nostr relays. Both browsers hash the same string and land on the same
+four, which is the only property that matters — peers sharing no relay never find
+each other, peers sharing one always do.
 
-Handing every room all six, which is what this used to do, sounds like
-redundancy and mostly is not: both browsers then opened six sockets, announced
-on six topics and ran six independent offer exchanges to build one connection,
-with six chances for the same pair to race each other into a discarded offer.
-One relay each also spreads rooms over the pool instead of stacking them onto
-whichever host is first in a list.
+Four rather than one, so three of a room's relays can be down or refusing traffic
+before the room is. That matters more than it sounds: two of the six hosts this
+pool started with turned out to be silently rejecting our ICE candidates, and at
+one relay per room that made a third of all room codes unconnectable purely by
+name. Ten in the pool rather than six, so a bad host lands on 40% of rooms
+instead of two thirds — and each of those rooms still has three good relays.
 
-The cost is real and worth stating: a room is only as reachable as the one relay
-its name chose. `RELAYS_PER_ROOM` is the dial — at 2 a room keeps a
-deterministic assignment and gets a spare, at the price of bringing the racing
-back.
+Every host in the pool was measured, not recommended: `npm run probe:relays`
+publishes real Trystero traffic through one socket and counts it out of another,
+five rounds of sixteen events. Sixteen of the fifty relays Trystero ships as
+defaults cannot do that.
+
+The cost is four WebSockets per participant rather than one, and four times the
+announce traffic out of each browser. What it does not cost is a bigger burst on
+any single relay — each one still sees exactly one offer and one candidate stream
+per browser, because Trystero keeps its per-peer state keyed by peer rather than
+by relay. `RELAYS_PER_ROOM` is the dial.
 
 **What the relay can see.** Nothing useful. Trystero derives the topics by
 hashing the room code and encrypts every payload with it before publishing, so
@@ -248,6 +254,7 @@ Then use `http://localhost:5173/sample.mp4` as the video link.
 | `npm run lint` | ESLint |
 | `npm run check` | **Everything above.** Run this before pushing. |
 | `npm run sample:video` | Generate `public/sample.mp4` for local testing (needs ffmpeg) |
+| `npm run probe:relays` | Check every signalling relay in the pool still carries a burst of events. Run it when a room will not connect. |
 
 ### Testing on a real phone
 
@@ -408,10 +415,24 @@ Watching one somebody else is sharing works on a phone.
 **Peers never connect.** The chip says *Can't reach them · retrying*, and it
 means it — a failed connection now rebuilds and tries again with backoff, so
 give it a minute before doing anything. Open **Connection details** if it
-persists: it says which of the three failures this is. With TURN credentials
-configured even a symmetric NAT should get through, so a room that still will
-not form usually means the deploy has no TURN key, or the relay this room's code
-chose is unreachable — try a different room code, or a different network.
+persists: it says which of the four failures this is, and it can now see the
+connections that *failed* rather than only the ones that worked, which is what
+makes it worth opening. Two lines to read first:
+
+- *"candidates gathered"* — if it lists `relay`, TURN is working from this
+  browser, whatever any error message says. If it lists only `host`, STUN is
+  being blocked by this network.
+- The verdict at the top. **"the other side never received it"** means
+  signalling, not the network: the room's Nostr relay carried the offer and
+  dropped the ICE candidates behind it. Nothing about TURN will fix that. Try a
+  different room code — the code picks the relays — and run
+  `npm run probe:relays` to find out which host in the pool has gone bad. Two of
+  the pool's original six did exactly this. A room uses four relays, so this
+  verdict means all four dropped them, which points at the pool rather than at
+  one unlucky host.
+
+A genuine **symmetric NAT** verdict with no TURN key on the deploy is the other
+common one, and is fixed by configuring `TURN_KEY_ID` and `TURN_KEY_API_TOKEN`.
 
 **My phone locked and the room lost me.** It should recover on its own within
 a few seconds of unlocking — iOS tears down the connection while the screen is

@@ -95,11 +95,19 @@ function asText(d: Diagnostics, connected: boolean, joinError: string | null): s
     summarise(d, connected),
     `connected: ${connected}`,
     `candidates gathered: ${d.gathered.join(', ') || 'none'}`,
+    // Twenty in a healthy empty room — Trystero's pool — so it is labelled to
+    // read as normal. What is being reported here is really the zero: nothing
+    // built at all and an offer nobody answered are completely different
+    // problems, and this panel used to print the same line for both.
+    `offers ready and unanswered: ${d.waiting} (a pool of these is normal)`,
   ]
   if (joinError) lines.push(`last error: ${joinError}`)
   for (const p of d.peers) {
     lines.push(
       `peer ${p.peerId}: connection=${p.connection} ice=${p.ice} gathering=${p.gathering}` +
+        // Said separately from the states, because by the time this is read the
+        // states usually say `closed` and only this remembers what happened.
+        (p.failed && p.connection !== 'failed' ? ' (failed earlier)' : '') +
         (p.localType ? ` via ${p.localType}->${p.remoteType}` : ''),
     )
   }

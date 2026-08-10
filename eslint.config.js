@@ -25,6 +25,17 @@ export default tseslint.config(
     },
   },
   {
+    // Developer tools, run with `node scripts/…` and never bundled. Node
+    // globals, and printing is the entire point of them.
+    files: ['scripts/**/*.mjs'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: { ...globals.node },
+    },
+    rules: { 'no-console': 'off' },
+  },
+  {
     // The share worker is served from public/ as-is, so it is plain JS and it
     // runs in a service worker rather than in a page.
     files: ['public/**/*.js'],

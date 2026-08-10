@@ -8,7 +8,7 @@ says what I decided, why, and what it would take to change. The ones marked
 
 ## Architecture
 
-### 1. Signalling is a public Nostr relay again, one per room ⚠️
+### 1. Signalling is a public Nostr relay again, four per room
 
 You asked for our own relay instead of public ones, and we built it: one Netlify
 function, `netlify/functions/signal.ts`, logic in `src/signal/relay.ts`. It
@@ -29,20 +29,70 @@ public relays go dark or start refusing our events, swapping one import in
 has not stopped being true — a public relay answers to nobody — it is just not
 worth six seconds a join until it bites.
 
-**What changed on the way back: one relay per room, not six.** The room code is
-hashed and indexes into the pinned pool (`src/sync/nostrRelays.ts`). Both
-browsers hash the same string and land on the same host, which is the only
-property that matters. Handing every room all six meant every room had all six
-in common — six sockets, six announces, six independent offer exchanges to build
-one connection, and six chances for a pair to race each other into a discarded
-offer. One relay each also spreads rooms over the pool rather than stacking them
-onto whichever host is first in the list.
+**How a room picks its relays.** The room code is hashed and indexes into the
+pinned pool (`src/sync/nostrRelays.ts`), taking four consecutive hosts from
+there. Both browsers hash the same string and land on the same four, which is the
+only property that matters — Trystero matches peers through the relays they have
+in common.
 
-**What that costs.** A room is now only as reachable as the one relay its name
-chose; before, five of six could be down and the room still formed. This is the
-item in this document I would most want a second opinion on. `RELAYS_PER_ROOM`
-is a one-character change: at 2, a room keeps a deterministic assignment and
-gets a spare, at the price of bringing the cross-relay racing back.
+**This was 1 for a day, and that was a mistake.** The argument for one was that
+six relays meant six independent offer exchanges racing each other to build one
+connection. Reading `@trystero-p2p/core` settles it: per-peer state is keyed by
+peer, not by relay — one `offerPeer`, one `answeringPeer`, one `connectedPeer`,
+and `ensureOffer` returns the offer it already made. `handleAnnouncement` and
+`handleOffer` both return early on `answeringPeer || offerAnswered`, and glare is
+resolved by comparing `selfId` to `peerId`, which is relay-independent. Four
+announcements produce one offer, published four times. Nothing races.
+
+**And the single point of failure collected, within a day.** You reported a room
+that exchanged SDP and never connected, with Trystero blaming TURN. TURN was fine
+— the credential minted, and a real allocation against `turn.cloudflare.com`
+succeeded from the same machine. The relay was the problem. Measured with
+`scripts/probe-relays.mjs`, which sends twelve events through one socket and
+counts them out of another:
+
+- `relay.damus.io` refused 7 of the first 12 — *"rate-limited: you are noting too
+  much"* — on first contact, then refused the socket itself for minutes
+  afterwards. Trickle ICE is exactly that burst, so the offer and answer landed
+  and the candidates behind them did not.
+- `offchain.pub` carries one burst from a new key and then refuses everything:
+  *"Policy violated and pubkey is not in our web of trust."* Trystero signs with a
+  throwaway key, so it is never in anyone's web of trust; one reconnect spends
+  the whole allowance.
+
+Both are gone. **Reachability was the wrong test** — every one of these answered
+a socket — and the probe script exists so the right test is one command. At one
+relay per room, two bad hosts out of six meant a third of all room codes were
+unconnectable, which is the shape of the bug: some rooms worked perfectly and
+others never worked at all, depending only on their name.
+
+**One passing round was also the wrong test.** `nostr.oxtr.dev` replaced one of
+them on the strength of a single clean burst and failed the very next round with
+"rate limited" — it was in the pool for a day. The probe now runs several rounds
+by default, because that is what separates "it worked when I tried it" from "it
+works", and it is exactly how `offchain.pub` fooled the first pass too.
+
+**Hence four of ten**, and the two numbers do different jobs:
+
+- **Four** is the room's redundancy — how many hosts must fail together before
+  that room dies. It costs four WebSockets per participant rather than one, and
+  four times the announce traffic out of each browser. It does *not* enlarge the
+  per-relay burst that damus rate-limited: each relay still sees exactly one
+  offer and one candidate stream from each browser.
+- **Ten** is the blast radius. A room takes four consecutive hosts, so a bad
+  relay is on 40% of rooms rather than 67%, and each of those rooms still has
+  three good ones. Widening the pool costs a room nothing.
+
+The ten were picked by measurement, not reputation: `SURVEY=1 npm run probe:relays`
+swept Trystero's fifty-odd default relays, 35 carried two rounds, and the ten
+here each carried five rounds of sixteen. Sixteen of the fifty could not — a
+third refused the socket outright, and the rest failed in ways nothing in the app
+could have seen.
+
+⚠️ **The honest caveat:** these are strangers' servers, and none of them knows it
+is carrying WebRTC signalling. Redundancy raises the number that must fail
+together and does nothing else. This is why `src/signal/relay.ts` stays in the
+tree — see the standby note above.
 
 **What none of this costs: privacy.** Trystero hashes the room code to derive
 the topics and encrypts every payload with it before publishing, so the relay
@@ -557,8 +607,9 @@ anyone*, because that is now what is happening.
 with the app's own `appId` and relay list, reached each other through five of
 the six relays when this was measured. Room-code normalisation, topic derivation
 and the password key derivation are deterministic and identical on both sides.
-If a join still fails after this, the next suspects are the single relay that
-room's code selects (see 1) and the network itself (see 2).
+If a join still fails after this, the next suspects are the relays that room's
+code selects (see 1 — `npm run probe:relays` checks them) and the network itself
+(see 2).
 
 ### 13j. Locking a phone used to end the room silently ⚠️
 

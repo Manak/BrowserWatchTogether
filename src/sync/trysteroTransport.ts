@@ -1,6 +1,7 @@
 import { joinRoom, selfId } from 'trystero/nostr'
 import { DEFAULT_ICE_SERVERS } from './iceServers'
 import { relaysForRoom } from './nostrRelays'
+import { labelConnections, sharedPeerRegistry } from './peerRegistry'
 import type { Msg } from './protocol'
 import type { FileChannel, MediaChannel, RangeRequest, Transport } from './transport'
 
@@ -75,6 +76,12 @@ export interface TrysteroOptions {
 }
 
 export function createTrysteroTransport(opts: TrysteroOptions): Transport {
+  // Records every peer connection built below, including the ones that fail,
+  // which is the only way the diagnostics panel can describe a failure. Shared
+  // across rooms deliberately — a reconnect must not wipe the history of what
+  // went wrong before it.
+  const registry = sharedPeerRegistry()
+
   const room = joinRoom(
     {
       appId: APP_ID,
@@ -83,8 +90,8 @@ export function createTrysteroTransport(opts: TrysteroOptions): Transport {
       password: opts.roomCode,
       relayConfig: {
         /**
-         * One relay, chosen by the room's own name. See `nostrRelays.ts` for
-         * why a room gets one rather than the whole pool.
+         * Four relays, chosen by the room's own name. See `nostrRelays.ts` for
+         * why four rather than one or the whole pool.
          *
          * Note that supplying `urls` means all of them are used: Trystero's
          * `redundancy` only trims its own default list, so setting it here
@@ -92,9 +99,24 @@ export function createTrysteroTransport(opts: TrysteroOptions): Transport {
          * we hand over is already the decision.
          */
         urls: relaysForRoom(opts.roomCode),
-        // We surface connection trouble in the UI; a relay that is briefly
-        // unreachable while it reconnects is not worth shouting about.
-        warnOnRelayFailure: false,
+        /**
+         * Left on, and it has to stay on.
+         *
+         * This was off, on the grounds that a relay reconnecting is not worth
+         * shouting about. What it actually silenced was the relay saying *no*:
+         * Trystero logs a refused publish through this same switch, and a public
+         * relay that rate-limits a burst of ICE candidates — several in the pool
+         * did, one of them on first contact — leaves two browsers that have
+         * exchanged SDP and can never finish connecting. With the warning off,
+         * the only symptom was
+         * Trystero's own guess that TURN must be misconfigured, which sent the
+         * search in the wrong direction entirely.
+         *
+         * A relay reconnect logs a line nobody reads. A refused publish is the
+         * whole diagnosis. There is no setting that keeps the second and drops
+         * the first, so keep both.
+         */
+        warnOnRelayFailure: true,
       },
       /**
        * Trickle ICE is left at Trystero's default of on, which is the right
@@ -125,6 +147,11 @@ export function createTrysteroTransport(opts: TrysteroOptions): Transport {
          */
         iceServers: opts.iceServers ?? DEFAULT_ICE_SERVERS,
       },
+      // Every peer connection Trystero builds is now one of ours, so the
+      // diagnostics panel can find the ones that failed as well as the one that
+      // worked. Omitted when the browser has no RTCPeerConnection to subclass,
+      // which leaves Trystero on its own default. See `peerRegistry.ts`.
+      ...(registry.connectionClass ? { rtcPolyfill: registry.connectionClass } : {}),
     },
     opts.roomCode,
     {
@@ -180,7 +207,9 @@ export function createTrysteroTransport(opts: TrysteroOptions): Transport {
       streamHandlers.push(handler)
     },
     connections() {
-      return left ? {} : room.getPeers()
+      // Everything built, not just what connected — `room.getPeers()` alone
+      // shows an empty panel in exactly the case somebody opened it for.
+      return left ? {} : labelConnections(room.getPeers(), registry.built())
     },
   }
 
